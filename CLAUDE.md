@@ -90,11 +90,22 @@ python detect_test.py      # live detector view (uses config.CAMERA_INDEX)
 python capture.py          # key-driven dataset capture (uses config.CAMERA_INDEX)
 ```
 
-All three default to `config.CAMERA_INDEX`; override per-run with `--camera N`.
+`capture.py`/`detect_test.py` accept `--camera N`; otherwise camera selection
+follows `config` (see below).
 
-**USB-C camera:** plug it in, run `python list_cameras.py`. Index 0 is usually
-the built-in webcam, so the higher reported index is typically the external
-USB-C camera — set that as `CAMERA_INDEX` in `config.py`.
+**Choosing the external USB-C camera explicitly (recommended):**
+`open_camera()` selects in this order — by **name** (`config.CAMERA_NAME`), then
+by **index** (`config.CAMERA_INDEX`). Name selection is robust to index numbers
+changing on reboot/replug. Workflow:
+1. Plug in the USB-C camera, run `python list_cameras.py` — it lists each
+   working index *and its device name* (macOS), and recommends a `CAMERA_NAME`.
+2. Set `CAMERA_NAME = "USB"` (or whatever distinguishes it from "FaceTime") in
+   `config.py`. Leave it `""` to fall back to `CAMERA_INDEX`.
+3. On open, the app prints e.g. `[camera] OK: using camera index 1 ('USB Camera')`
+   so you can confirm it's not the built-in webcam.
+
+Name lookup uses macOS `system_profiler` and is macOS-only; on Windows/Linux
+the app falls back to `CAMERA_INDEX`.
 
 **Troubleshooting:**
 - *"could not open camera index N"* — wrong index; run `list_cameras.py` and use

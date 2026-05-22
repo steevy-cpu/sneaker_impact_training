@@ -6,14 +6,23 @@ This module picks the correct OpenCV backend for the current operating system
 so the camera works on macOS (AVFoundation), Windows (DirectShow), and Linux
 (default) -- including external USB-C cameras.
 
-Public functions:
-    get_camera_backend()        -> the OpenCV backend flag for this OS
-    open_camera(camera_index)   -> a working, opened cv2.VideoCapture (or None)
-    release_camera(cap)         -> safely release a camera
+Selecting the RIGHT camera:
+    Camera index numbers can shift between reboots or when you replug a USB-C
+    camera, so pinning an index isn't always reliable. If config.CAMERA_NAME is
+    set, open_camera() finds the camera whose device name contains that text
+    (e.g. "USB") and uses it explicitly -- otherwise it falls back to
+    config.CAMERA_INDEX. open_camera() prints the chosen camera's name so you
+    can confirm it's the external camera and not the built-in webcam.
 
-Camera index is never hardcoded: open_camera() defaults to config.CAMERA_INDEX.
-Run `python list_cameras.py` to find which index your camera is on.
+Public functions:
+    get_camera_backend()              -> the OpenCV backend flag for this OS
+    list_camera_names()               -> camera device names, in index order
+    find_camera_index_by_name(text)   -> index whose name contains text, or None
+    open_camera(camera_index=None)    -> a working, opened cv2.VideoCapture (or None)
+    release_camera(cap)               -> safely release a camera
 """
+import json
+import subprocess
 import sys
 
 import cv2
@@ -35,17 +44,70 @@ def get_camera_backend():
     return cv2.CAP_ANY
 
 
+def list_camera_names():
+    """Return camera device names in index order (macOS only).
+
+    Uses macOS `system_profiler` so cameras can be chosen by name. On this list
+    position 0 is the first camera, position 1 the second, etc., which matches
+    OpenCV's AVFoundation index order in typical setups. On Windows/Linux this
+    returns [] (name lookup isn't supported there yet) and callers fall back to
+    a numeric index.
+    """
+    if not sys.platform.startswith("darwin"):
+        return []
+    try:
+        out = subprocess.run(
+            ["system_profiler", "SPCameraDataType", "-json"],
+            capture_output=True, text=True, timeout=10,
+        )
+        data = json.loads(out.stdout)
+        cameras = data.get("SPCameraDataType", [])
+        return [cam.get("_name", "") for cam in cameras]
+    except Exception:
+        # Never let camera-name probing crash the app; just skip name lookup.
+        return []
+
+
+def find_camera_index_by_name(text):
+    """Return the index of the first camera whose name contains `text`
+    (case-insensitive), or None if there's no match / no text given."""
+    if not text:
+        return None
+    target = text.strip().lower()
+    for index, name in enumerate(list_camera_names()):
+        if target in name.lower():
+            return index
+    return None
+
+
 def open_camera(camera_index=None):
     """Open a camera and confirm it actually produces frames.
 
-    If `camera_index` is None, falls back to config.CAMERA_INDEX so the index
-    is never hardcoded. Prints clear messages on failure and returns the opened
-    cv2.VideoCapture on success, or None if the camera could not be opened or
-    did not deliver a frame.
-    """
-    if camera_index is None:
-        camera_index = config.CAMERA_INDEX
+    Selection order when `camera_index` is None:
+      1. config.CAMERA_NAME (explicit by name -- recommended for USB-C cameras)
+      2. config.CAMERA_INDEX (numeric fallback)
+    Passing `camera_index` explicitly overrides both.
 
+    Prints clear messages and the chosen camera's name. Returns the opened
+    cv2.VideoCapture on success, or None on failure.
+    """
+    # --- Decide which camera to use --------------------------------------
+    if camera_index is None:
+        by_name = find_camera_index_by_name(config.CAMERA_NAME)
+        if config.CAMERA_NAME and by_name is None:
+            print(f"[camera] WARNING: no camera name contains "
+                  f"'{config.CAMERA_NAME}'; falling back to "
+                  f"CAMERA_INDEX={config.CAMERA_INDEX}.")
+        camera_index = by_name if by_name is not None else config.CAMERA_INDEX
+
+    # Resolve a human-readable name for the chosen index, when available.
+    names = list_camera_names()
+    chosen_name = names[camera_index] if 0 <= camera_index < len(names) else None
+    label = f"index {camera_index}"
+    if chosen_name:
+        label += f" ('{chosen_name}')"
+
+    # --- Open it ----------------------------------------------------------
     backend = get_camera_backend()
     cap = cv2.VideoCapture(camera_index, backend)
 
@@ -55,20 +117,20 @@ def open_camera(camera_index=None):
         cap = cv2.VideoCapture(camera_index)
 
     if not cap.isOpened():
-        print(f"[camera] ERROR: could not open camera index {camera_index}.")
-        print("[camera] Try a different index (run: python list_cameras.py),")
+        print(f"[camera] ERROR: could not open camera {label}.")
+        print("[camera] Try a different index/name (run: python list_cameras.py),")
         print("[camera] check the USB-C connection, and confirm camera permissions.")
         return None
 
     # Confirm the camera really delivers frames -- "opened" alone isn't enough.
     ok, _ = cap.read()
     if not ok:
-        print(f"[camera] ERROR: camera index {camera_index} opened but returned no frame.")
+        print(f"[camera] ERROR: camera {label} opened but returned no frame.")
         print("[camera] Try a different index or check that no other app is using it.")
         cap.release()
         return None
 
-    print(f"[camera] OK: using camera index {camera_index}.")
+    print(f"[camera] OK: using camera {label}.")
     return cap
 
 
