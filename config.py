@@ -9,8 +9,8 @@ hardcodes a camera index, file path, or threshold. Other modules will
 
 NOTE
 ----
-These are safe starter values only. Camera, detection, tracking, saving,
-and color logic are NOT implemented yet -- they arrive in later phases.
+As of Phase 1 the camera layer is implemented (see camera_utils.py). Detection,
+tracking, saving, and color logic are NOT implemented yet -- later phases.
 """
 
 # --- Camera ---------------------------------------------------------------

@@ -35,8 +35,8 @@ Module responsibilities (most are placeholders until their phase lands):
 | File | Role | Phase |
 |------|------|-------|
 | `config.py` | All tunables (camera, thresholds, paths, flags). Nothing else hardcodes these. | done |
-| `camera_utils.py` | Cross-platform camera open (AVFoundation/DSHOW/default). | 1 |
-| `list_cameras.py` | Probe which camera indices are usable. | 1 |
+| `camera_utils.py` | Cross-platform camera open (AVFoundation/DSHOW/default). | done |
+| `list_cameras.py` | Probe which camera indices are usable. | done |
 | `ui_utils.py` | Draw boxes/labels, handle double-click, flash confirmation. | 2-3 |
 | `label_live.py` | Main app entry point tying it all together. | 2-5 |
 | `tracking_utils.py` | Lightweight centroid/IoU shoe tracking + expiry. | 3 |
@@ -57,10 +57,10 @@ Module responsibilities (most are placeholders until their phase lands):
 - Shoe classes: `SHOE_CLASS_IDS = {203, 56, 432, 249}` (Footwear/Boot/Sandal/
   High heels in Open Images V7), duplicated in both scripts — keep in sync.
 
-> **Platform note:** `capture.py`/`detect_test.py` still use the Windows-only
-> `cv2.CAP_DSHOW` backend and will fail to open a camera on macOS/Linux. This is
-> fixed centrally in `camera_utils.py` (Phase 1); the new modules must route all
-> camera access through it rather than calling `cv2.VideoCapture` directly.
+> **Platform note (resolved in Phase 1):** camera access is now centralized in
+> `camera_utils.open_camera()`, which selects the right backend per OS
+> (AVFoundation on macOS, DirectShow on Windows, default on Linux). All scripts
+> route through it — do not call `cv2.VideoCapture` with a hardcoded backend.
 
 ## Output layout & metadata (target, Phase 4)
 
@@ -82,10 +82,32 @@ frame_width, frame_height, model_used`.
 - Keep files under ~300 lines; prefer small helper modules over giant scripts.
 - Beginner-readable code with comments. Simple > clever; avoid over-engineering.
 
+## Testing the camera (Phase 1)
+
+```bash
+python list_cameras.py     # probe indices 0..5, prints which work + a suggestion
+python detect_test.py      # live detector view (uses config.CAMERA_INDEX)
+python capture.py          # key-driven dataset capture (uses config.CAMERA_INDEX)
+```
+
+All three default to `config.CAMERA_INDEX`; override per-run with `--camera N`.
+
+**USB-C camera:** plug it in, run `python list_cameras.py`. Index 0 is usually
+the built-in webcam, so the higher reported index is typically the external
+USB-C camera — set that as `CAMERA_INDEX` in `config.py`.
+
+**Troubleshooting:**
+- *"could not open camera index N"* — wrong index; run `list_cameras.py` and use
+  a reported one. Also confirm the cable/adapter and that the camera is seated.
+- *"opened but returned no frame"* — another app (Zoom, Photo Booth, etc.) is
+  holding the camera, or it needs a moment to warm up. Close other apps, retry.
+- *macOS first run* — grant camera permission when prompted (System Settings →
+  Privacy & Security → Camera → enable for your terminal/IDE).
+
 ## Phase roadmap
 
 1. **Foundation + camera support** — `config.py`, `camera_utils.py`,
-   `list_cameras.py`; make cameras cross-platform. *(infrastructure scaffolded)*
+   `list_cameras.py`; cross-platform camera access. **Done.**
 2. **Live detection UI** — `label_live.py` + `ui_utils.py`, boxes + confidence, no saving.
 3. **Tracking + labeling** — stable IDs, default Reuse, double-click → Recycle, finalize on exit.
 4. **Dataset storage** — `save_utils.py`, crops + JSON, dated folders, safe numbering.
@@ -93,9 +115,12 @@ frame_width, frame_height, model_used`.
 6. **Dataset quality tools** — dedup, blur detection, confidence filtering, review mode.
 7. **Future training pipeline** — YOLO fine-tuning / classification (not started).
 
-**Current state:** architecture scaffolded only. `config.py` has starter values;
-all other new modules are docstring-only placeholders. No camera, detection,
-tracking, saving, or color logic is implemented yet.
+**Current state:** Phase 1 complete — cross-platform camera support is live
+(`camera_utils.py`, `list_cameras.py`) and `capture.py`/`detect_test.py` route
+through it using `config.CAMERA_INDEX`. The other new modules
+(`ui_utils`, `tracking_utils`, `save_utils`, `color_utils`, `label_live`) remain
+docstring-only placeholders. No detection-labeling, tracking, saving, or color
+logic is implemented yet.
 
 ## Setup
 

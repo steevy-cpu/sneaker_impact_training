@@ -5,7 +5,7 @@ Use this to check whether the detector can recognize the BOTTOM (sole) of a
 shoe. Run it, hold the sole up to the camera, and watch the boxes/labels.
 
 Live mode (default):
-    .\venv\Scripts\python.exe detect_test.py
+    python detect_test.py
     - Opens a window, runs the model every frame at a low threshold.
     - Draws EVERY detection (any class) with its name + confidence.
     - Shoe classes (Footwear/Boot/Sandal/High heels) are highlighted in green
@@ -13,13 +13,16 @@ Live mode (default):
     - q / ESC to quit.
 
 One-shot mode:
-    .\venv\Scripts\python.exe detect_test.py --shot
+    python detect_test.py --shot
     - Grabs a single frame, prints every detection, saves debug_frame.jpg.
 """
 
 import argparse
 import cv2
 from ultralytics import YOLO
+
+import config
+from camera_utils import open_camera, release_camera
 
 SHOE_CLASS_IDS = {203, 56, 432, 249}  # Footwear, Boot, Sandal, High heels
 
@@ -45,8 +48,8 @@ def draw_detections(view, result):
 
 
 def run_live(model, cam, conf, imgsz, every):
-    cap = cv2.VideoCapture(cam, cv2.CAP_DSHOW)
-    if not cap.isOpened():
+    cap = open_camera(cam)
+    if cap is None:
         raise SystemExit(f"Could not open camera index {cam}. Try --camera 1.")
     print("Live. Hold the SOLE up to the camera and watch. q to quit.")
     last = ""
@@ -82,18 +85,18 @@ def run_live(model, cam, conf, imgsz, every):
             if key in (ord("q"), 27):
                 break
     finally:
-        cap.release()
+        release_camera(cap)
         cv2.destroyAllWindows()
 
 
 def run_shot(model, cam, conf, warmup):
-    cap = cv2.VideoCapture(cam, cv2.CAP_DSHOW)
-    if not cap.isOpened():
+    cap = open_camera(cam)
+    if cap is None:
         raise SystemExit(f"Could not open camera index {cam}. Try --camera 1.")
     frame, ok = None, False
     for _ in range(warmup):
         ok, frame = cap.read()
-    cap.release()
+    release_camera(cap)
     if frame is None or not ok:
         raise SystemExit("Camera opened but returned no frame. Try a different --camera index.")
 
@@ -115,7 +118,7 @@ def run_shot(model, cam, conf, warmup):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--camera", type=int, default=0)
+    ap.add_argument("--camera", type=int, default=config.CAMERA_INDEX)
     ap.add_argument("--model", default="yolov8m-oiv7.pt")
     ap.add_argument("--conf", type=float, default=0.05, help="low so we see everything")
     ap.add_argument("--imgsz", type=int, default=480, help="inference resolution; lower = lighter")

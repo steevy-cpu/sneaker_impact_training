@@ -25,6 +25,9 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
+import config
+from camera_utils import open_camera, release_camera
+
 # key (as char) -> (folder name, human description)
 LABELS = {
     "1": ("A", "GOOD TOP"),
@@ -133,7 +136,8 @@ def draw_legend(frame, detected):
 
 def main():
     ap = argparse.ArgumentParser(description="Capture and label shoe images for the dataset.")
-    ap.add_argument("--camera", type=int, default=0, help="webcam index (default 0)")
+    ap.add_argument("--camera", type=int, default=config.CAMERA_INDEX,
+                    help="webcam index (default: config.CAMERA_INDEX)")
     ap.add_argument("--model", default="yolov8m-oiv7.pt",
                     help="YOLOv8 Open Images V7 model with a Footwear class (auto-downloads)")
     ap.add_argument("--out", default="dataset", help="output dataset root folder")
@@ -152,8 +156,8 @@ def main():
     print(f"Loading model {args.model} ...")
     model = YOLO(args.model)
 
-    cap = cv2.VideoCapture(args.camera, cv2.CAP_DSHOW)
-    if not cap.isOpened():
+    cap = open_camera(args.camera)
+    if cap is None:
         raise SystemExit(f"Could not open camera index {args.camera}")
 
     print("Webcam open. Show a shoe and press 1/2/3/4 to save, q to quit.")
@@ -234,7 +238,7 @@ def main():
                 print(f"  saved [{folder} = {desc}] ({src}) -> {path} "
                       f"(total in {folder}: {counts[folder]})")
     finally:
-        cap.release()
+        release_camera(cap)
         cv2.destroyAllWindows()
         print("Done. Saved per folder:", counts)
 
