@@ -1,0 +1,13 @@
+venv/
+dataset/
+*.pt
+__pycache__/
+*.pyc
+
+# macOS junk (the T7 drive is exFAT and writes these sidecar files)
+.DS_Store
+._*
+
+# collected dataset images/metadata stay local
+sneaker_impact/pictures/incoming_*/
+models/*.pt
