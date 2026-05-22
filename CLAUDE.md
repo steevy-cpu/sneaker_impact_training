@@ -37,8 +37,8 @@ Module responsibilities (most are placeholders until their phase lands):
 | `config.py` | All tunables (camera, thresholds, paths, flags). Nothing else hardcodes these. | done |
 | `camera_utils.py` | Cross-platform camera open (AVFoundation/DSHOW/default). | done |
 | `list_cameras.py` | Probe which camera indices are usable. | done |
-| `ui_utils.py` | Draw boxes/labels, handle double-click, flash confirmation. | 2-3 |
-| `label_live.py` | Main app entry point tying it all together. | 2-5 |
+| `ui_utils.py` | Draw boxes/labels/FPS/status (Phase 2 done); mouse + Reuse/Recycle coloring later. | 2-3 |
+| `label_live.py` | Main app: live camera + YOLO detection + box drawing (Phase 2 done). | 2-5 |
 | `tracking_utils.py` | Lightweight centroid/IoU shoe tracking + expiry. | 3 |
 | `save_utils.py` | Save crops + metadata JSON into dated folders. | 4 |
 | `color_utils.py` | Broad dominant-color estimate; must fail safe. | 5 |
@@ -104,23 +104,40 @@ USB-C camera — set that as `CAMERA_INDEX` in `config.py`.
 - *macOS first run* — grant camera permission when prompted (System Settings →
   Privacy & Security → Camera → enable for your terminal/IDE).
 
+## Live detection (Phase 2)
+
+```bash
+python label_live.py       # opens "Sneaker Impact - Live Detection", draws shoe boxes
+```
+
+- Uses `config.MODEL_PATH`, `config.CAMERA_INDEX`, `config.CONFIDENCE_THRESHOLD`,
+  `config.MAX_DETECTIONS` (caps boxes drawn), and `config.DISPLAY_FPS`.
+- Keeps only detections whose class name is `shoe`/`shoes`/`footwear`
+  (case-insensitive, see `SHOE_CLASS_NAMES` in `label_live.py`). Box caption
+  looks like `Shoe 0.87`.
+- **Keyboard:** `Q` or `ESC` to quit.
+- **Model caveat:** `config.MODEL_PATH` defaults to `yolov8n.pt` (COCO), which
+  has **no shoe class** — `label_live.py` prints a startup warning and detects
+  nothing. For real shoe detection, set `MODEL_PATH = "yolov8m-oiv7.pt"`
+  (Open Images V7, class "Footwear") in `config.py`.
+- Detection/display only: no labeling, saving, tracking, or color yet.
+
 ## Phase roadmap
 
 1. **Foundation + camera support** — `config.py`, `camera_utils.py`,
    `list_cameras.py`; cross-platform camera access. **Done.**
-2. **Live detection UI** — `label_live.py` + `ui_utils.py`, boxes + confidence, no saving.
+2. **Live detection UI** — `label_live.py` + `ui_utils.py`, boxes + confidence + FPS, no saving. **Done.**
 3. **Tracking + labeling** — stable IDs, default Reuse, double-click → Recycle, finalize on exit.
 4. **Dataset storage** — `save_utils.py`, crops + JSON, dated folders, safe numbering.
 5. **Color detection** — broad categories only, lightweight, fail-safe.
 6. **Dataset quality tools** — dedup, blur detection, confidence filtering, review mode.
 7. **Future training pipeline** — YOLO fine-tuning / classification (not started).
 
-**Current state:** Phase 1 complete — cross-platform camera support is live
-(`camera_utils.py`, `list_cameras.py`) and `capture.py`/`detect_test.py` route
-through it using `config.CAMERA_INDEX`. The other new modules
-(`ui_utils`, `tracking_utils`, `save_utils`, `color_utils`, `label_live`) remain
-docstring-only placeholders. No detection-labeling, tracking, saving, or color
-logic is implemented yet.
+**Current state:** Phases 1–2 complete. Cross-platform camera support
+(`camera_utils.py`, `list_cameras.py`) and a live YOLO detection UI
+(`label_live.py` + `ui_utils.py`) are working. `tracking_utils`, `save_utils`,
+and `color_utils` remain docstring-only placeholders. No double-click labeling,
+tracking finalization, dataset saving, or color detection is implemented yet.
 
 ## Setup
 
