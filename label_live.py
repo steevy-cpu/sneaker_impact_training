@@ -21,7 +21,7 @@ from ultralytics import YOLO
 
 import config
 from camera_utils import open_camera, release_camera
-from ui_utils import draw_detection_box, draw_fps, draw_status_text
+from ui_utils import draw_detection_mask, draw_fps, draw_status_text
 
 WINDOW_TITLE = "Sneaker Impact - Live Detection"
 
@@ -111,7 +111,7 @@ def main():
             # Draw only the most confident MAX_DETECTIONS shoes.
             shoes.sort(key=lambda s: s[0], reverse=True)
             for conf, bbox in shoes[:config.MAX_DETECTIONS]:
-                draw_detection_box(frame, bbox, "Shoe", conf)
+                draw_detection_mask(frame, bbox, "Shoe", conf)
 
             # FPS (smoothed so the number doesn't jitter).
             now = time.time()
