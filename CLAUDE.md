@@ -42,7 +42,7 @@ Module responsibilities (most are placeholders until their phase lands):
 | `detector_utils.py` | Async YOLO + GrabCut worker thread (DetectorThread). | done |
 | `tracking_utils.py` | Lightweight IoU shoe tracking + expiry. | done |
 | `save_utils.py` | Save crops + metadata JSON into dated folders. | done |
-| `color_utils.py` | Broad dominant-color estimate; must fail safe. | 5 |
+| `color_utils.py` | Broad dominant-color estimate; must fail safe. | done |
 | `capture.py` | Original key-driven dataset capture tool (preserved). | existing |
 | `detect_test.py` | Original detector diagnostic (preserved). | existing |
 
@@ -149,14 +149,24 @@ python label_live.py       # opens "Sneaker Impact - Live Detection"
 2. **Live detection UI** — `label_live.py` + `ui_utils.py`, masks + confidence + FPS. **Done.**
 3. **Tracking + labeling** — stable IDs, default Reuse, double-click → Recycle, finalize on exit. **Done.**
 4. **Dataset storage** — `save_utils.py`, crops + JSON, dated folders, safe numbering. **Done.**
-5. **Color detection** — broad categories only, lightweight, fail-safe.
+5. **Color detection** — broad categories only, lightweight, fail-safe. **Done.**
 6. **Dataset quality tools** — dedup, blur detection, confidence filtering, review mode.
 7. **Future training pipeline** — YOLO fine-tuning / classification (not started).
 
-**Current state:** Phases 1–4 complete. Live detection, IoU tracking,
-double-click Recycle labeling, frame-exit Reuse auto-save, and dataset
-storage (crops + metadata JSON in dated folders) all work. `color_utils.py`
-remains a docstring-only placeholder (Phase 5).
+**Current state:** Phases 1–5 complete. Live detection (YOLO-World or
+OIV7), IoU tracking, click-Recycle labeling, frame-exit Reuse auto-save,
+dataset storage (crops + metadata JSON in dated folders), and broad-
+category color detection (HSV-based, polygon-aware) all work. Phase 6
+(dataset quality tools) is the next planned step.
+
+Color detection details: `classify_color(image, mask=None)` in
+`color_utils.py` returns `(name, confidence)` for one of 11 broad
+categories: black, white, gray, brown, red, orange, yellow, green, blue,
+purple, pink (or "unknown" on failure). Gated by
+`config.ENABLE_COLOR_DETECTION`. `save_shoe` calls it on every save,
+using the GrabCut polygon when available to ignore background pixels.
+Thresholds (`_V_BLACK`, `_V_WHITE`, `_S_GRAY`, `_V_BROWN`) are tunable
+constants at the top of `color_utils.py`.
 
 ## Detection model: YOLO-World vs OIV7
 

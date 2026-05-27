@@ -201,7 +201,8 @@ def main():
                 save_shoe(t.best_frame, t.best_bbox, "Recycle",
                           t.last_conf,
                           model_used=active_model,
-                          tracking_id=t.id)
+                          tracking_id=t.id,
+                          polygon=t.polygon)
                 t.saved = True
 
             # --- Expired tracks: auto-save Reuse ------------------------
@@ -211,7 +212,8 @@ def main():
                 save_shoe(ex.best_frame, ex.best_bbox, "Reuse",
                           ex.last_conf,
                           model_used=active_model,
-                          tracking_id=ex.id)
+                          tracking_id=ex.id,
+                          polygon=ex.polygon)
                 ex.saved = True
 
             # --- Draw masks ---------------------------------------------

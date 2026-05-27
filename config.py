@@ -60,8 +60,9 @@ GRABCUT_REFRESH_CYCLES = 8           # reuse a cached polygon for up to this
 OUTPUT_ROOT = "sneaker_impact/pictures"   # where crops + metadata will be saved
 SAVE_FULL_FRAME = False                   # also save the full frame beside crop
 
-# --- Color detection (future) ---------------------------------------------
-ENABLE_COLOR_DETECTION = False
+# --- Color detection ------------------------------------------------------
+ENABLE_COLOR_DETECTION = True        # fill detected_color + color_confidence
+                                     # on each saved shoe JSON
 
 # --- Tracking & UI --------------------------------------------------------
 TRACK_EXPIRATION_FRAMES = 60         # frames a shoe may be missing before save

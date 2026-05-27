@@ -74,7 +74,8 @@ def _clip_bbox(bbox, frame_w, frame_h):
 
 
 def save_shoe(frame, bbox, classification, yolo_confidence,
-              model_used=None, tracking_id=None, output_root=None):
+              model_used=None, tracking_id=None, output_root=None,
+              polygon=None):
     """Save one shoe (crop + JSON sidecar) and return the JPG path on success.
 
     On any failure (bad bbox, disk error, etc.) prints the error and returns
@@ -88,6 +89,10 @@ def save_shoe(frame, bbox, classification, yolo_confidence,
         model_used:      e.g. "yolov8m-oiv7.pt".
         tracking_id:     integer track ID (or None).
         output_root:     defaults to config.OUTPUT_ROOT.
+        polygon:         optional GrabCut contour (in full-frame coords).
+                         When color detection is enabled, restricts color
+                         sampling to pixels inside the polygon so background
+                         doesn't bias the answer.
     """
     try:
         if frame is None:
@@ -115,13 +120,34 @@ def save_shoe(frame, bbox, classification, yolo_confidence,
         if getattr(config, "SAVE_FULL_FRAME", False):
             cv2.imwrite(os.path.join(folder, base + "_full.jpg"), frame)
 
+        # Optional color detection. Translate the polygon (if provided) from
+        # full-frame coords into crop coords so the mask lines up with the
+        # crop. classify_color is wrapped in try/except so any failure here
+        # is logged but doesn't break the save.
+        detected_color = None
+        color_confidence = None
+        if getattr(config, "ENABLE_COLOR_DETECTION", False):
+            try:
+                from color_utils import classify_color
+                crop_polygon = None
+                if polygon is not None and len(polygon) >= 3:
+                    crop_polygon = polygon.copy()
+                    crop_polygon[:, :, 0] -= x1
+                    crop_polygon[:, :, 1] -= y1
+                detected_color, color_confidence = classify_color(
+                    crop, mask=crop_polygon)
+            except Exception as exc:                  # noqa: BLE001 - fail safe
+                print(f"[save] color detection failed: {exc}")
+                detected_color = "unknown"
+                color_confidence = 0.0
+
         metadata = {
             "filename": base + ".jpg",
             "classification": classification,
             "shoe_number": n,
             "timestamp": datetime.now().isoformat(timespec="seconds"),
-            "detected_color": None,            # Phase 5
-            "color_confidence": None,          # Phase 5
+            "detected_color": detected_color,
+            "color_confidence": color_confidence,
             "yolo_confidence": float(yolo_confidence),
             "bbox": [x1, y1, x2, y2],
             "tracking_id": tracking_id,
