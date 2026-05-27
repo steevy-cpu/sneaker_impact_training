@@ -38,7 +38,8 @@ Module responsibilities (most are placeholders until their phase lands):
 | `camera_utils.py` | Cross-platform camera open (AVFoundation/DSHOW/default). | done |
 | `list_cameras.py` | Probe which camera indices are usable. | done |
 | `ui_utils.py` | Translucent green/red masks, FPS, status. | done |
-| `label_live.py` | Main app: camera + YOLO + tracker + mouse + auto-save. | done |
+| `label_live.py` | Main app: camera + display + mouse + tracker + saves. | done |
+| `detector_utils.py` | Async YOLO + GrabCut worker thread (DetectorThread). | done |
 | `tracking_utils.py` | Lightweight IoU shoe tracking + expiry. | done |
 | `save_utils.py` | Save crops + metadata JSON into dated folders. | done |
 | `color_utils.py` | Broad dominant-color estimate; must fail safe. | 5 |
