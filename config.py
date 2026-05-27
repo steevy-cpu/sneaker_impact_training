@@ -14,16 +14,15 @@ tracking, saving, and color logic are NOT implemented yet -- later phases.
 """
 
 # --- Camera ---------------------------------------------------------------
-# Preferred: select the camera EXPLICITLY by name so it always picks your
-# external USB-C camera, never the built-in webcam, even if index numbers
-# change. Set CAMERA_NAME to part of the camera's name (case-insensitive),
-# e.g. "USB". Run `python list_cameras.py` to see the exact names.
-# Leave it as "" to select by index instead.
-CAMERA_NAME = "Logitech"   # external Logitech Webcam C930e (not built-in FaceTime)
-
-# Numeric fallback, used only when CAMERA_NAME is "" or doesn't match.
-# 0 is usually the built-in webcam; an external USB-C camera is often 1 or 2.
-CAMERA_INDEX = 1
+# Pick the camera by NUMERIC INDEX. To find it: run `python list_cameras.py`,
+# which probes 0..5 and saves a preview JPG from each working index to /tmp/
+# so you can visually identify which one is your external camera.
+#
+# macOS quirk: name-based lookup is unreliable. macOS `system_profiler` lists
+# cameras in one order, but OpenCV's AVFoundation backend may use a different
+# order, so picking by name can silently grab the wrong camera. Use the index.
+CAMERA_NAME = ""           # leave empty; name lookup isn't reliable on macOS
+CAMERA_INDEX = 0           # OpenCV index for the Logitech Webcam C930e here
 
 # --- Detection ------------------------------------------------------------
 MODEL_PATH = "yolov8n.pt"            # YOLO weights to load (later phases)

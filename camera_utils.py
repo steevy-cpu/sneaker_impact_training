@@ -100,12 +100,11 @@ def open_camera(camera_index=None):
                   f"CAMERA_INDEX={config.CAMERA_INDEX}.")
         camera_index = by_name if by_name is not None else config.CAMERA_INDEX
 
-    # Resolve a human-readable name for the chosen index, when available.
-    names = list_camera_names()
-    chosen_name = names[camera_index] if 0 <= camera_index < len(names) else None
+    # NOTE: we deliberately don't print a device name here. On macOS the order
+    # returned by `system_profiler` can differ from OpenCV's AVFoundation index
+    # order, so showing a name would be misleading. Verify visually via
+    # `list_cameras.py`, which saves a preview JPG from each working index.
     label = f"index {camera_index}"
-    if chosen_name:
-        label += f" ('{chosen_name}')"
 
     # --- Open it ----------------------------------------------------------
     backend = get_camera_backend()

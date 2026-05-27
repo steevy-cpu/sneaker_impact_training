@@ -2,20 +2,29 @@
 list_cameras.py -- camera discovery utility.
 
 Probes camera indices 0 through 5 and reports which ones actually open and
-deliver a frame, including each camera's name (on macOS). Use it to pick your
-external USB-C camera, then either:
-    - set CAMERA_NAME in config.py to part of its name (recommended), or
-    - set CAMERA_INDEX in config.py to its index.
+deliver a frame. For each working index it also saves a preview JPG to /tmp/
+so you can VISUALLY identify which index is your external camera, then set
+CAMERA_INDEX in config.py.
+
+Why preview JPGs? On macOS, the camera names returned by `system_profiler`
+don't always match OpenCV's AVFoundation index order -- so picking by name
+can grab the wrong camera. Looking at the actual frame is the only reliable
+way to confirm which index is which.
 
     python list_cameras.py
 """
 import cv2
+import time
 
 from camera_utils import get_camera_backend, list_camera_names, release_camera
 
 
-def probe(index):
-    """Try to open `index` and read one frame. Return (works, width, height)."""
+def probe(index, save_path=None):
+    """Try to open `index`, read a frame, optionally save it.
+
+    Returns (works, width, height). Uses several reads to give the camera
+    time to warm up -- some USB cameras return an empty first frame.
+    """
     backend = get_camera_backend()
     cap = cv2.VideoCapture(index, backend)
     if not cap.isOpened():
@@ -25,51 +34,50 @@ def probe(index):
         release_camera(cap)
         return False, 0, 0
 
-    ok, frame = cap.read()
+    ok, frame = False, None
+    for _ in range(10):                 # warm-up reads
+        ok, frame = cap.read()
+        if ok and frame is not None:
+            break
+        time.sleep(0.05)
+
     release_camera(cap)
     if ok and frame is not None:
+        if save_path:
+            cv2.imwrite(save_path, frame)
         h, w = frame.shape[:2]
         return True, w, h
     return False, 0, 0
 
 
 def main():
-    names = list_camera_names()   # device names in index order (macOS); else []
+    names = list_camera_names()   # device names from system_profiler (macOS)
     print("Probing camera indices 0..5 ...\n")
     working = []
     for i in range(6):
-        works, w, h = probe(i)
-        name = names[i] if i < len(names) else ""
-        name_part = f"  \"{name}\"" if name else ""
+        preview = f"/tmp/cam_{i}.jpg"
+        works, w, h = probe(i, save_path=preview)
+        # Show the system_profiler name only as a *hint* -- its order may not
+        # match OpenCV's index order on macOS, so don't trust it as truth.
+        hint = names[i] if i < len(names) else ""
+        hint_part = f"  (system_profiler hint: \"{hint}\")" if hint else ""
         if works:
-            print(f"  [{i}] WORKS  ({w}x{h}){name_part}")
-            working.append((i, name))
+            print(f"  [{i}] WORKS  ({w}x{h})  preview: {preview}{hint_part}")
+            working.append(i)
         else:
-            print(f"  [{i}] not available{name_part}")
+            print(f"  [{i}] not available{hint_part}")
 
     print()
     if not working:
         print("No working cameras found.")
-        print("Check the USB-C connection and camera permissions, then retry.")
+        print("Check the USB connection and camera permissions, then retry.")
         return
 
-    # Prefer a camera that is clearly NOT the built-in webcam.
-    builtin_hints = ("facetime", "built-in", "builtin")
-    external = [(i, n) for i, n in working
-                if n and not any(h in n.lower() for h in builtin_hints)]
-
-    print(f"Working cameras: {[i for i, _ in working]}")
-    if external:
-        idx, name = external[0]
-        # Suggest a short, distinctive substring of the name for CAMERA_NAME.
-        hint = name.split()[0] if name else ""
-        print(f"\nLooks like your external camera is index {idx}: \"{name}\"")
-        print(f"Recommended (robust): set CAMERA_NAME = \"{hint}\" in config.py")
-        print(f"Or set CAMERA_INDEX = {idx}")
-    else:
-        idx = working[-1][0] if len(working) > 1 else working[0][0]
-        print(f"\nSuggested CAMERA_INDEX for config.py: {idx}")
-        print("(Plug in your USB-C camera and re-run to select it by name.)")
+    print(f"Working cameras: {working}")
+    print()
+    print("VISUAL CHECK -- open the preview images and pick the one showing")
+    print("your external camera's view, then set CAMERA_INDEX in config.py:")
+    print(f"    open {'  '.join(f'/tmp/cam_{i}.jpg' for i in working)}")
 
 
 if __name__ == "__main__":
