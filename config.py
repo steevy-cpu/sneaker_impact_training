@@ -25,7 +25,7 @@ CAMERA_NAME = ""           # leave empty; name lookup isn't reliable on macOS
 CAMERA_INDEX = 0           # OpenCV index for the Logitech Webcam C930e here
 
 # --- Detection ------------------------------------------------------------
-MODEL_PATH = "yolov8n.pt"            # YOLO weights to load (later phases)
+MODEL_PATH = "yolov8m-oiv7.pt"       # Open Images V7 -- has "Footwear" class
 CONFIDENCE_THRESHOLD = 0.5           # minimum YOLO confidence to keep a box
 MAX_DETECTIONS = 5                   # cap on shoes processed per frame
 
