@@ -25,7 +25,20 @@ CAMERA_NAME = ""           # leave empty; name lookup isn't reliable on macOS
 CAMERA_INDEX = 0           # OpenCV index for the Logitech Webcam C930e here
 
 # --- Detection ------------------------------------------------------------
-MODEL_PATH = "yolov8m-oiv7.pt"       # Open Images V7 medium -- "Footwear" class
+# Two model families are supported:
+#  - USE_YOLO_WORLD=True: YOLO-World (open-vocabulary), prompted with the
+#    classes in YOLO_WORLD_CLASSES. Better at uncommon shoe types (five-toe
+#    shoes, etc.) because it understands text labels, not just a single
+#    "Footwear" bucket. Small variant chosen for Pi 5 / Jetson Nano viability.
+#  - USE_YOLO_WORLD=False: standard YOLO with MODEL_PATH (default OIV7 medium).
+USE_YOLO_WORLD = True
+YOLO_WORLD_MODEL = "yolov8s-worldv2.pt"   # ~28MB, runs on Pi 5 / Jetson Nano
+YOLO_WORLD_CLASSES = [                    # prompts -- tune freely
+    "shoe", "sneaker", "running shoe", "boot", "sandal",
+    "flip flop", "high heel", "toe shoe", "athletic shoe", "loafer",
+]
+
+MODEL_PATH = "yolov8m-oiv7.pt"       # used when USE_YOLO_WORLD=False
 CONFIDENCE_THRESHOLD = 0.5           # minimum YOLO confidence to keep a box
 MAX_DETECTIONS = 5                   # cap on shoes processed per frame
 YOLO_IMGSZ = 416                     # YOLO input size; default ultralytics

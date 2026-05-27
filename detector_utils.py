@@ -28,17 +28,21 @@ from ui_utils import grabcut_polygon
 
 
 def pick_device():
-    """Choose the YOLO inference device: MPS on Apple Silicon, else CPU.
+    """Choose the YOLO inference device, preferring GPU when available.
 
-    Honors `config.YOLO_DEVICE` -- "auto" probes MPS; anything else is used
-    verbatim ("cpu", "mps", "cuda:0"). Falls back to "cpu" on any probe
-    failure so a bad torch install can't break startup.
+    Order: CUDA (Jetson, desktop NVIDIA) -> MPS (Apple Silicon) -> CPU
+    (Raspberry Pi 5, fallback). Honors `config.YOLO_DEVICE` -- "auto"
+    probes in that order; anything else is used verbatim ("cpu", "mps",
+    "cuda:0"). Falls back to "cpu" on any probe failure so a broken torch
+    install can't block startup.
     """
     pref = getattr(config, "YOLO_DEVICE", "auto")
     if pref and pref != "auto":
         return pref
     try:
         import torch                              # type: ignore
+        if torch.cuda.is_available():
+            return "cuda:0"
         mps = getattr(torch.backends, "mps", None)
         if mps is not None and mps.is_available():
             return "mps"

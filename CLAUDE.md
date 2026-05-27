@@ -158,6 +158,55 @@ double-click Recycle labeling, frame-exit Reuse auto-save, and dataset
 storage (crops + metadata JSON in dated folders) all work. `color_utils.py`
 remains a docstring-only placeholder (Phase 5).
 
+## Detection model: YOLO-World vs OIV7
+
+Two model families are wired up:
+
+- **YOLO-World** (default, `USE_YOLO_WORLD=True`) — open-vocabulary
+  detector. You give it a text prompt list (`YOLO_WORLD_CLASSES`); the
+  model only detects those categories. Better at uncommon shoe types
+  (five-toe shoes, etc.) than the single "Footwear" bucket in OIV7.
+  Default weights `yolov8s-worldv2.pt` (~28MB) are sized to run on
+  Raspberry Pi 5 and Jetson Nano.
+- **OIV7** (`USE_YOLO_WORLD=False`) — standard Open Images V7 YOLOv8.
+  Single "Footwear" class. Use this if YOLO-World feels too slow or
+  noisy on a given setup.
+
+Tuning class prompts: edit `config.YOLO_WORLD_CLASSES`. More prompts =
+broader coverage but also more false positives.
+
+## Deployment to Pi 5 / Jetson Nano
+
+Code is already cross-platform-aware: `detector_utils.pick_device()`
+picks CUDA on Jetson, MPS on Apple Silicon, CPU on Raspberry Pi 5.
+
+For live-FPS deployment, raw PyTorch is usually too slow on these
+targets. Export the model to an accelerated runtime once classes are
+locked in:
+
+```python
+# Jetson Nano -- TensorRT engine
+model.export(format="engine", imgsz=416, device=0)   # produces yolov8s-worldv2.engine
+
+# Raspberry Pi 5 -- ONNX Runtime or NCNN
+model.export(format="onnx", imgsz=416, simplify=True)
+# or:
+model.export(format="ncnn", imgsz=416)
+```
+
+Notes:
+- **YOLO-World "bakes in" the prompt classes at export time** -- call
+  `model.set_classes(...)` BEFORE `model.export(...)`.
+- On Pi 5, try `imgsz=320` and INT8 quantization for higher FPS.
+- Jetson with TensorRT: ~15-20 FPS at `imgsz=416`.
+- Pi 5 with ONNX/NCNN: ~3-5 FPS at `imgsz=416`, ~5-10 FPS at `imgsz=320`.
+- Both targets benefit from the async detector thread already in place
+  (display stays smooth even when inference is slow).
+
+Extra packages needed at deploy time:
+- Jetson: TensorRT is bundled with JetPack; nothing extra.
+- Pi 5: `pip install onnxruntime` (CPU build) or build NCNN per docs.
+
 ## Setup
 
 ```bash

@@ -32,7 +32,7 @@ Controls:
 import time
 
 import cv2
-from ultralytics import YOLO
+from ultralytics import YOLO, YOLOWorld
 
 import config
 from camera_utils import open_camera, release_camera
@@ -61,7 +61,14 @@ PENDING_RECYCLE_SAVES = []
 
 
 def is_shoe(class_name):
-    """True if a YOLO class name should count as a shoe (case-insensitive)."""
+    """True if a YOLO class name should count as a shoe (case-insensitive).
+
+    When USE_YOLO_WORLD is on, every detection is already constrained by
+    the prompt list (see config.YOLO_WORLD_CLASSES), so any class name we
+    see came from that list -- treat all of them as shoes.
+    """
+    if getattr(config, "USE_YOLO_WORLD", False):
+        return True
     return class_name.strip().lower() in SHOE_CLASS_NAMES
 
 
@@ -70,11 +77,32 @@ def all_names(names):
     return list(names.values()) if isinstance(names, dict) else list(names)
 
 
-def load_model(path):
-    """Load the YOLO model, returning None (with a clear message) on failure."""
+def load_model():
+    """Load the detection model -- YOLO-World if enabled, plain YOLO otherwise.
+
+    Returns the loaded model object, or None on failure (with a printed
+    error). For YOLO-World the configured class prompts are applied via
+    set_classes() so detections are pre-filtered to shoe-related labels.
+    """
+    if getattr(config, "USE_YOLO_WORLD", False):
+        path = config.YOLO_WORLD_MODEL
+        classes = list(config.YOLO_WORLD_CLASSES)
+        try:
+            m = YOLOWorld(path)
+            m.set_classes(classes)
+            print(f"[model] loaded YOLO-World '{path}' with {len(classes)} "
+                  f"prompts: {', '.join(classes)}")
+            return m
+        except Exception as exc:                   # noqa: BLE001
+            print(f"[model] ERROR: could not load YOLO-World '{path}': {exc}")
+            return None
+
+    path = config.MODEL_PATH
     try:
-        return YOLO(path)
-    except Exception as exc:                       # noqa: BLE001 - report any load error
+        m = YOLO(path)
+        print(f"[model] loaded YOLO '{path}'")
+        return m
+    except Exception as exc:                       # noqa: BLE001
         print(f"[model] ERROR: could not load YOLO model '{path}': {exc}")
         return None
 
@@ -107,17 +135,19 @@ def main():
     global TRACKER
 
     # --- Load model -------------------------------------------------------
-    model = load_model(config.MODEL_PATH)
+    model = load_model()
     if model is None:
-        raise SystemExit("Exiting: YOLO model failed to load.")
+        raise SystemExit("Exiting: detection model failed to load.")
 
     # Warn early if this model can't ever detect a shoe (e.g. plain COCO).
-    names = getattr(model, "names", {}) or {}
-    if not any(is_shoe(n) for n in all_names(names)):
-        print(f"[model] WARNING: '{config.MODEL_PATH}' has no shoe/footwear "
-              "class, so no shoes will be detected.")
-        print("[model] Set MODEL_PATH in config.py to an Open Images V7 model "
-              "(e.g. yolov8n-oiv7.pt or yolov8m-oiv7.pt).")
+    # Skip the check for YOLO-World since its class list is what we asked for.
+    if not getattr(config, "USE_YOLO_WORLD", False):
+        names = getattr(model, "names", {}) or {}
+        if not any(is_shoe(n) for n in all_names(names)):
+            print(f"[model] WARNING: '{config.MODEL_PATH}' has no shoe/footwear "
+                  "class, so no shoes will be detected.")
+            print("[model] Set MODEL_PATH in config.py to an Open Images V7 "
+                  "model (e.g. yolov8m-oiv7.pt), or enable USE_YOLO_WORLD.")
 
     # --- Open camera ------------------------------------------------------
     cap = open_camera()                            # uses config.CAMERA_INDEX
@@ -136,7 +166,10 @@ def main():
     detector = DetectorThread(model, shoe_class_predicate=is_shoe)
     detector.start()
 
-    print(f"Live detection running on '{config.MODEL_PATH}'. "
+    active_model = (config.YOLO_WORLD_MODEL
+                    if getattr(config, "USE_YOLO_WORLD", False)
+                    else config.MODEL_PATH)
+    print(f"Live detection running on '{active_model}'. "
           "Click a shoe to flag it Recycle. Press Q or ESC to quit.")
     prev_time = time.time()
     fps = 0.0
@@ -167,7 +200,7 @@ def main():
                     continue
                 save_shoe(t.best_frame, t.best_bbox, "Recycle",
                           t.last_conf,
-                          model_used=config.MODEL_PATH,
+                          model_used=active_model,
                           tracking_id=t.id)
                 t.saved = True
 
@@ -177,7 +210,7 @@ def main():
                     continue
                 save_shoe(ex.best_frame, ex.best_bbox, "Reuse",
                           ex.last_conf,
-                          model_used=config.MODEL_PATH,
+                          model_used=active_model,
                           tracking_id=ex.id)
                 ex.saved = True
 
