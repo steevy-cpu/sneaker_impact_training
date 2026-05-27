@@ -7,6 +7,7 @@ extents) plus a confidence caption, FPS, and a status line. Mouse handling
 and Reuse/Recycle color-coding arrive in Phase 3 -- not implemented here.
 """
 import cv2
+import numpy as np
 
 import config
 
@@ -21,21 +22,100 @@ FONT = cv2.FONT_HERSHEY_SIMPLEX
 MASK_ALPHA = 0.4   # 0 = invisible, 1 = solid green; 0.4 lets the shoe show through
 
 
-def draw_detection_mask(frame, bbox, label, confidence, color=GREEN):
-    """Overlay one detection as a translucent mask, smaller than its bbox.
+def grabcut_polygon(image, bbox, iters=3, min_area_frac=0.10, simplify=0.005):
+    """Run GrabCut on a padded crop around `bbox` and return a polygon.
 
-    bbox is (x1, y1, x2, y2) in pixels. We shrink it toward its center by
-    `config.MASK_SHRINK` so the painted mask doesn't overflow onto adjacent
-    shoes (YOLO bboxes tend to include padding around the object). The
-    rectangle is filled with `color` -- default green for Reuse, red briefly
-    after a click for Recycle -- and alpha-blended onto the frame so the
-    shoe stays visible. A small caption "<label> <confidence>" sits just
-    above the shrunk mask in the same color.
+    Returns a numpy contour of shape (N, 1, 2) in absolute frame coordinates,
+    suitable for cv2.fillPoly / cv2.polylines. Returns None if GrabCut
+    failed, produced no foreground, or the foreground was too small to be
+    a real shoe.
 
-    NOTE: this shrink is purely cosmetic. Click hit-testing (in tracking_utils
-    ShoeTracker.find_at) still uses the full bbox, so the click target is
-    forgiving even when the visible mask is small.
+    Speed note: running GrabCut on the full 1920x1080 frame is slow because
+    its cost scales with the image size. We crop to bbox + ~10% padding so
+    each call works on a small region (typically ~5-30 ms on CPU).
     """
+    try:
+        if image is None or image.size == 0:
+            return None
+        h, w = image.shape[:2]
+        x1, y1, x2, y2 = [int(v) for v in bbox]
+        x1 = max(0, min(x1, w - 1))
+        y1 = max(0, min(y1, h - 1))
+        x2 = max(0, min(x2, w))
+        y2 = max(0, min(y2, h))
+        bw, bh = x2 - x1, y2 - y1
+        if bw < 20 or bh < 20:
+            return None
+
+        # Pad the work region so GrabCut has nearby background to learn from.
+        pad_x = max(10, bw // 10)
+        pad_y = max(10, bh // 10)
+        cx1 = max(0, x1 - pad_x)
+        cy1 = max(0, y1 - pad_y)
+        cx2 = min(w, x2 + pad_x)
+        cy2 = min(h, y2 + pad_y)
+        crop = image[cy1:cy2, cx1:cx2]
+        if crop.size == 0:
+            return None
+
+        # The "definitely foreground rectangle" is the bbox, in crop coords.
+        rect = (x1 - cx1, y1 - cy1, bw, bh)
+        mask = np.zeros(crop.shape[:2], np.uint8)
+        bgd = np.zeros((1, 65), np.float64)
+        fgd = np.zeros((1, 65), np.float64)
+        cv2.grabCut(crop, mask, rect, bgd, fgd, iters, cv2.GC_INIT_WITH_RECT)
+
+        fg = ((mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD)).astype("uint8")
+        contours, _ = cv2.findContours(fg, cv2.RETR_EXTERNAL,
+                                       cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return None
+        c = max(contours, key=cv2.contourArea)
+        if cv2.contourArea(c) < min_area_frac * bw * bh:
+            return None
+
+        # Simplify so we don't store hundreds of points per shoe.
+        epsilon = simplify * cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, epsilon, True)
+        if len(approx) < 3:
+            return None
+
+        # Translate from crop coords back to full-frame coords.
+        approx = approx.copy()
+        approx[:, :, 0] += cx1
+        approx[:, :, 1] += cy1
+        return approx
+    except Exception as exc:                       # noqa: BLE001 - never crash live
+        print(f"[grabcut] failed: {exc}")
+        return None
+
+
+def draw_detection_mask(frame, bbox, label, confidence, color=GREEN,
+                        polygon=None):
+    """Overlay one detection as a translucent mask.
+
+    If `polygon` (numpy contour of shape (N, 1, 2)) is provided, fill that
+    polygon -- the mask will follow the shoe's outline from GrabCut. If
+    `polygon` is None, fall back to a shrunk rectangle inside `bbox` (since
+    YOLO bboxes overhang the shoe; see `config.MASK_SHRINK`).
+
+    Click hit-testing in tracking_utils still uses the full bbox, so even
+    when the visible mask is shrunk or polygon-shaped, clicks anywhere
+    inside the bbox count as hitting the shoe.
+    """
+    # Polygon path: shape-following mask.
+    if polygon is not None and len(polygon) >= 3:
+        poly_int = polygon.astype(np.int32)
+        overlay = frame.copy()
+        cv2.fillPoly(overlay, [poly_int], color)
+        cv2.addWeighted(overlay, MASK_ALPHA, frame, 1 - MASK_ALPHA, 0, frame)
+        cv2.polylines(frame, [poly_int], True, color, 2)
+        # Label at the polygon's top-left.
+        px, py, _, _ = cv2.boundingRect(poly_int)
+        text = f"{label} {confidence:.2f}"
+        cv2.putText(frame, text, (px, max(py - 8, 14)), FONT, 0.6, color, 2)
+        return frame
+
     x1, y1, x2, y2 = [int(v) for v in bbox]
 
     # Shrink the rectangle toward its center for drawing only.

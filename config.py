@@ -28,6 +28,9 @@ CAMERA_INDEX = 0           # OpenCV index for the Logitech Webcam C930e here
 MODEL_PATH = "yolov8m-oiv7.pt"       # Open Images V7 -- has "Footwear" class
 CONFIDENCE_THRESHOLD = 0.5           # minimum YOLO confidence to keep a box
 MAX_DETECTIONS = 5                   # cap on shoes processed per frame
+ENABLE_GRABCUT = True                # run GrabCut on each bbox to get a
+                                     # shoe-shaped polygon for the live mask;
+                                     # set False if it's too slow/noisy
 
 # --- Output ---------------------------------------------------------------
 OUTPUT_ROOT = "sneaker_impact/pictures"   # where crops + metadata will be saved

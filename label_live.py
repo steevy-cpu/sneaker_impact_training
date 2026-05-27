@@ -1,18 +1,26 @@
 """
-label_live.py -- live YOLO shoe detection + labeling UI (Phase 3).
+label_live.py -- live YOLO shoe detection + labeling UI.
 
-What it does each frame:
-  1. Reads a frame from the camera (camera_utils).
-  2. Runs YOLO and keeps detections whose class name is in SHOE_CLASS_NAMES.
-  3. Feeds those detections to a lightweight IoU tracker (tracking_utils), so
-     each shoe keeps a stable ID while it's on screen. The tracker also
-     remembers the sharpest frame per shoe, so saves don't get motion blur.
-  4. Draws a translucent mask over each tracked shoe -- GREEN for "Reuse"
-     (default), briefly RED for "Recycle" right after a click.
-  5. On a left click inside a shoe's mask, flips that shoe to "Recycle" and
-     saves its sharpest crop + metadata JSON immediately (save_utils).
-  6. When a shoe has been gone for config.TRACK_EXPIRATION_FRAMES frames and
-     was never clicked, auto-saves it as "Reuse" and drops the track.
+Architecture:
+  - MAIN thread reads from the camera, displays frames, handles the mouse.
+    It runs at camera FPS -- never blocked by detection.
+  - DETECTOR thread continuously runs YOLO + GrabCut on the most recent
+    camera frame and posts the results (bbox, conf, polygon per shoe) to
+    shared state. Detection FPS is naturally lower than camera FPS, and
+    that's OK: the live preview keeps moving even when YOLO is slow.
+
+Per frame in the main loop:
+  1. Read a camera frame.
+  2. Hand the frame to the detector worker (shared state).
+  3. Read the latest detections from the worker (may be from a slightly
+     older frame -- visually this is a tiny mask lag, no big deal).
+  4. Update the IoU tracker (tracking_utils), which keeps stable IDs and
+     also remembers the SHARPEST frame per shoe (variance of Laplacian).
+  5. If the operator clicked a shoe since the last frame, save it as
+     Recycle now. If any track has been gone long enough, save it as Reuse.
+  6. Draw a translucent mask over each tracked shoe -- GrabCut polygon
+     when available, shrunk rectangle as fallback. Green = Reuse default,
+     brief red = just-clicked Recycle.
 
 Saves land in `sneaker_impact/pictures/incoming<MMDDYYYY>/`.
 
@@ -23,6 +31,7 @@ Controls:
     Click on a shoe -> classify it as Recycle and save it
     Q or ESC        -> quit
 """
+import threading
 import time
 
 import cv2
@@ -32,7 +41,8 @@ import config
 from camera_utils import open_camera, release_camera
 from save_utils import save_shoe
 from tracking_utils import ShoeTracker
-from ui_utils import GREEN, RED, draw_detection_mask, draw_fps, draw_status_text
+from ui_utils import (GREEN, RED, draw_detection_mask, draw_fps,
+                      draw_status_text, grabcut_polygon)
 
 WINDOW_TITLE = "Sneaker Impact - Live Detection"
 
@@ -49,9 +59,19 @@ FLASH_DURATION_SEC = 0.5      # how long the Recycle mask flashes red after a cl
 # --- Module-level state shared with the mouse callback --------------------
 # cv2.setMouseCallback doesn't pass `self`, so the tracker + pending-save list
 # live at module scope. They're only read/appended from the mouse callback;
-# the main loop owns all actual save calls (single-threaded, no locks needed).
+# the main loop owns all actual save calls.
 TRACKER = None                # ShoeTracker, created in main()
 PENDING_RECYCLE_SAVES = []    # list of ShoeTrack waiting for Recycle save
+
+# --- Detector worker shared state -----------------------------------------
+# Main thread writes _LATEST_FRAME (the freshest camera frame); the detector
+# thread reads it, runs YOLO+GrabCut, and writes _LATEST_DETECTIONS. Each
+# direction is protected by its own lock so neither side blocks the other.
+_FRAME_LOCK = threading.Lock()
+_LATEST_FRAME = [None]                  # numpy frame, written by main
+_DETECTIONS_LOCK = threading.Lock()
+_LATEST_DETECTIONS = [[]]               # list of (bbox, conf, polygon) tuples
+_WORKER_RUNNING = threading.Event()     # set while the worker should loop
 
 
 def is_shoe(class_name):
@@ -80,6 +100,45 @@ def load_model(path):
     except Exception as exc:                       # noqa: BLE001 - report any load error
         print(f"[model] ERROR: could not load YOLO model '{path}': {exc}")
         return None
+
+
+def detector_worker(model):
+    """Background loop: run YOLO + GrabCut on the latest camera frame.
+
+    Posts a list of `(bbox, conf, polygon)` to _LATEST_DETECTIONS each cycle.
+    Polygon is None if GrabCut failed or is disabled in config.
+    """
+    while _WORKER_RUNNING.is_set():
+        with _FRAME_LOCK:
+            frame = _LATEST_FRAME[0]
+        if frame is None:
+            time.sleep(0.005)
+            continue
+
+        try:
+            result = model.predict(frame, conf=config.CONFIDENCE_THRESHOLD,
+                                   verbose=False)[0]
+            shoes = []
+            boxes = result.boxes
+            count = 0 if boxes is None else len(boxes)
+            for i in range(count):
+                cls_id = int(boxes.cls[i].item())
+                if not is_shoe(class_name(result.names, cls_id)):
+                    continue
+                conf = float(boxes.conf[i].item())
+                x1, y1, x2, y2 = boxes.xyxy[i].cpu().numpy().tolist()
+                bbox = (x1, y1, x2, y2)
+                polygon = (grabcut_polygon(frame, bbox)
+                           if getattr(config, "ENABLE_GRABCUT", True) else None)
+                shoes.append((bbox, conf, polygon))
+            # Keep only the top-confidence detections.
+            shoes.sort(key=lambda s: s[1], reverse=True)
+            shoes = shoes[:config.MAX_DETECTIONS]
+            with _DETECTIONS_LOCK:
+                _LATEST_DETECTIONS[0] = shoes
+        except Exception as exc:                   # noqa: BLE001 - never crash worker
+            print(f"[detector] ERROR: {exc}")
+            time.sleep(0.05)
 
 
 def on_mouse(event, x, y, flags, param):
@@ -135,7 +194,14 @@ def main():
     cv2.namedWindow(WINDOW_TITLE)
     cv2.setMouseCallback(WINDOW_TITLE, on_mouse)
 
-    print(f"Live detection running on '{config.MODEL_PATH}'. "
+    # --- Start detector worker -------------------------------------------
+    _WORKER_RUNNING.set()
+    worker = threading.Thread(target=detector_worker, args=(model,),
+                              daemon=True, name="detector")
+    worker.start()
+
+    print(f"Live detection running on '{config.MODEL_PATH}' "
+          f"(GrabCut={'on' if getattr(config, 'ENABLE_GRABCUT', True) else 'off'}). "
           "Click a shoe to flag it Recycle. Press Q or ESC to quit.")
     prev_time = time.time()
     fps = 0.0
@@ -147,30 +213,18 @@ def main():
                 print("[camera] Failed to read frame; stopping.")
                 break
 
-            # --- YOLO detection -----------------------------------------
-            result = model.predict(frame, conf=config.CONFIDENCE_THRESHOLD,
-                                   verbose=False)[0]
-            shoes = []                              # list of (conf, bbox-tuple)
-            boxes = result.boxes
-            count = 0 if boxes is None else len(boxes)
-            for i in range(count):
-                cls_id = int(boxes.cls[i].item())
-                if not is_shoe(class_name(result.names, cls_id)):
-                    continue
-                conf = float(boxes.conf[i].item())
-                x1, y1, x2, y2 = boxes.xyxy[i].cpu().numpy().tolist()
-                shoes.append((conf, (x1, y1, x2, y2)))
+            # Hand the newest frame to the detector worker.
+            with _FRAME_LOCK:
+                _LATEST_FRAME[0] = frame.copy()
 
-            # Keep only the most confident MAX_DETECTIONS shoes.
-            shoes.sort(key=lambda s: s[0], reverse=True)
-            shoes = shoes[:config.MAX_DETECTIONS]
+            # Read the latest detections (may be from a slightly older frame).
+            with _DETECTIONS_LOCK:
+                shoes = list(_LATEST_DETECTIONS[0])
 
             # --- Tracker update -----------------------------------------
             # Hand the tracker a CLEAN copy of the frame so the saved crops
-            # don't contain the green/red mask we're about to paint onto the
-            # display copy. (draw_detection_mask is in-place on its argument.)
-            detections = [(bbox, conf) for conf, bbox in shoes]
-            active = TRACKER.update(detections, frame.copy())
+            # don't contain the mask we're about to paint onto the display.
+            active = TRACKER.update(shoes, frame.copy())
 
             # --- Pending Recycle saves (from mouse clicks) --------------
             # Use best_frame/best_bbox (the sharpest snapshot of this shoe)
@@ -201,7 +255,7 @@ def main():
             for t in active:
                 color = RED if now < t.flash_until else GREEN
                 draw_detection_mask(frame, t.bbox, "Shoe", t.last_conf,
-                                    color=color)
+                                    color=color, polygon=t.polygon)
 
             # FPS (smoothed so the number doesn't jitter).
             dt = now - prev_time
@@ -222,6 +276,8 @@ def main():
             if key in (ord("q"), 27):              # 27 = ESC
                 break
     finally:
+        _WORKER_RUNNING.clear()
+        worker.join(timeout=2.0)
         release_camera(cap)
         cv2.destroyAllWindows()
         print("Live detection stopped.")
