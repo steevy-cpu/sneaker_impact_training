@@ -10,6 +10,7 @@ import cv2
 
 # Colors are BGR (OpenCV order).
 GREEN = (0, 255, 0)
+RED = (0, 0, 255)
 WHITE = (255, 255, 255)
 YELLOW = (0, 255, 255)
 FONT = cv2.FONT_HERSHEY_SIMPLEX
@@ -18,25 +19,26 @@ FONT = cv2.FONT_HERSHEY_SIMPLEX
 MASK_ALPHA = 0.4   # 0 = invisible, 1 = solid green; 0.4 lets the shoe show through
 
 
-def draw_detection_mask(frame, bbox, label, confidence):
-    """Overlay one detection as a translucent green mask filling its bbox.
+def draw_detection_mask(frame, bbox, label, confidence, color=GREEN):
+    """Overlay one detection as a translucent mask filling its bbox.
 
-    bbox is (x1, y1, x2, y2) in pixels -- i.e. the min/max x and y of the
-    detected shoe. We fill that whole rectangle with green and alpha-blend it
-    onto the frame, so the shoe stays visible underneath. A small caption
-    "<label> <confidence>" (e.g. "Shoe 0.87") sits just above the mask.
+    bbox is (x1, y1, x2, y2) in pixels. The rectangle is filled with `color`
+    (default green for Reuse) and alpha-blended onto the frame so the shoe
+    stays visible. Phase 3 callers pass red briefly after a double-click to
+    flash "Recycle" confirmation. A small caption "<label> <confidence>"
+    (e.g. "Shoe 0.87") sits just above the mask in the same color.
     """
     x1, y1, x2, y2 = [int(v) for v in bbox]
 
-    # Alpha-blend a filled green rectangle over only the bbox region.
+    # Alpha-blend a filled rectangle over only the bbox region.
     region = frame[y1:y2, x1:x2]
     if region.size:                                # skip degenerate (0-area) boxes
-        green_layer = region.copy()
-        green_layer[:] = GREEN
-        cv2.addWeighted(green_layer, MASK_ALPHA, region, 1 - MASK_ALPHA, 0, region)
+        layer = region.copy()
+        layer[:] = color
+        cv2.addWeighted(layer, MASK_ALPHA, region, 1 - MASK_ALPHA, 0, region)
 
     text = f"{label} {confidence:.2f}"
-    cv2.putText(frame, text, (x1, max(y1 - 8, 14)), FONT, 0.6, GREEN, 2)
+    cv2.putText(frame, text, (x1, max(y1 - 8, 14)), FONT, 0.6, color, 2)
     return frame
 
 

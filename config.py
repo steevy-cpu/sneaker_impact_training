@@ -36,6 +36,7 @@ SAVE_FULL_FRAME = False                   # also save the full frame beside crop
 # --- Color detection (future) ---------------------------------------------
 ENABLE_COLOR_DETECTION = False
 
-# --- Tracking & UI (future) -----------------------------------------------
+# --- Tracking & UI --------------------------------------------------------
 TRACK_EXPIRATION_FRAMES = 15         # frames a shoe may be missing before save
+TRACK_IOU_THRESHOLD = 0.3            # min IoU to match a detection to a track
 DISPLAY_FPS = True                   # draw an FPS overlay on the live feed

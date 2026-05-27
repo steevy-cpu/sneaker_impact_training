@@ -37,10 +37,10 @@ Module responsibilities (most are placeholders until their phase lands):
 | `config.py` | All tunables (camera, thresholds, paths, flags). Nothing else hardcodes these. | done |
 | `camera_utils.py` | Cross-platform camera open (AVFoundation/DSHOW/default). | done |
 | `list_cameras.py` | Probe which camera indices are usable. | done |
-| `ui_utils.py` | Draw boxes/labels/FPS/status (Phase 2 done); mouse + Reuse/Recycle coloring later. | 2-3 |
-| `label_live.py` | Main app: live camera + YOLO detection + box drawing (Phase 2 done). | 2-5 |
-| `tracking_utils.py` | Lightweight centroid/IoU shoe tracking + expiry. | 3 |
-| `save_utils.py` | Save crops + metadata JSON into dated folders. | 4 |
+| `ui_utils.py` | Translucent green/red masks, FPS, status. | done |
+| `label_live.py` | Main app: camera + YOLO + tracker + mouse + auto-save. | done |
+| `tracking_utils.py` | Lightweight IoU shoe tracking + expiry. | done |
+| `save_utils.py` | Save crops + metadata JSON into dated folders. | done |
 | `color_utils.py` | Broad dominant-color estimate; must fail safe. | 5 |
 | `capture.py` | Original key-driven dataset capture tool (preserved). | existing |
 | `detect_test.py` | Original detector diagnostic (preserved). | existing |
@@ -62,17 +62,20 @@ Module responsibilities (most are placeholders until their phase lands):
 > (AVFoundation on macOS, DirectShow on Windows, default on Linux). All scripts
 > route through it — do not call `cv2.VideoCapture` with a hardcoded backend.
 
-## Output layout & metadata (target, Phase 4)
+## Output layout & metadata
 
 ```
-sneaker_impact/pictures/incoming_YYYY-MM-DD/
+sneaker_impact/pictures/incoming<MMDDYYYY>/
     shoe_Reuse_1.jpg     shoe_Reuse_1.json
-    shoe_Recycle_2.jpg   shoe_Recycle_2.json
+    shoe_Recycle_1.jpg   shoe_Recycle_1.json
 ```
+
+Per-class counter (Reuse and Recycle have separate sequences), restart-safe
+(scans existing files to pick the next number), fresh folder per day.
 
 Metadata JSON fields: `filename, classification, shoe_number, timestamp,
-detected_color, color_confidence, yolo_confidence, bbox, tracking_id,
-frame_width, frame_height, model_used`.
+detected_color (null until Phase 5), color_confidence (null until Phase 5),
+yolo_confidence, bbox, tracking_id, frame_width, frame_height, model_used`.
 
 ## Engineering rules
 
@@ -93,19 +96,18 @@ python capture.py          # key-driven dataset capture (uses config.CAMERA_INDE
 `capture.py`/`detect_test.py` accept `--camera N`; otherwise camera selection
 follows `config` (see below).
 
-**Choosing the external USB-C camera explicitly (recommended):**
-`open_camera()` selects in this order — by **name** (`config.CAMERA_NAME`), then
-by **index** (`config.CAMERA_INDEX`). Name selection is robust to index numbers
-changing on reboot/replug. Workflow:
-1. Plug in the USB-C camera, run `python list_cameras.py` — it lists each
-   working index *and its device name* (macOS), and recommends a `CAMERA_NAME`.
-2. Set `CAMERA_NAME = "USB"` (or whatever distinguishes it from "FaceTime") in
-   `config.py`. Leave it `""` to fall back to `CAMERA_INDEX`.
-3. On open, the app prints e.g. `[camera] OK: using camera index 1 ('USB Camera')`
-   so you can confirm it's not the built-in webcam.
-
-Name lookup uses macOS `system_profiler` and is macOS-only; on Windows/Linux
-the app falls back to `CAMERA_INDEX`.
+**Choosing the external USB camera:** pick it by **numeric index** —
+`config.CAMERA_INDEX`. Name-based selection is intentionally disabled because
+on macOS the order returned by `system_profiler` doesn't reliably match
+OpenCV's AVFoundation index order, so a name lookup can silently grab the
+built-in webcam. Workflow:
+1. Plug in the USB camera, run `python list_cameras.py` — it probes indices
+   0..5 and saves a preview JPG from each working one to `/tmp/cam_N.jpg`.
+2. Open the previews, identify which file shows your external camera's view,
+   and set `CAMERA_INDEX` in `config.py` to that index.
+3. Leave `CAMERA_NAME = ""`. On open, the app prints e.g.
+   `[camera] OK: using camera index 0.` (no device name, since names from
+   `system_profiler` aren't trustworthy here).
 
 **Troubleshooting:**
 - *"could not open camera index N"* — wrong index; run `list_cameras.py` and use
@@ -115,40 +117,45 @@ the app falls back to `CAMERA_INDEX`.
 - *macOS first run* — grant camera permission when prompted (System Settings →
   Privacy & Security → Camera → enable for your terminal/IDE).
 
-## Live detection (Phase 2)
+## Live detection + labeling (Phases 2-4)
 
 ```bash
-python label_live.py       # opens "Sneaker Impact - Live Detection", draws shoe boxes
+python label_live.py       # opens "Sneaker Impact - Live Detection"
 ```
 
 - Uses `config.MODEL_PATH`, `config.CAMERA_INDEX`, `config.CONFIDENCE_THRESHOLD`,
-  `config.MAX_DETECTIONS` (caps boxes drawn), and `config.DISPLAY_FPS`.
+  `config.MAX_DETECTIONS`, `config.TRACK_EXPIRATION_FRAMES`,
+  `config.TRACK_IOU_THRESHOLD`, `config.OUTPUT_ROOT`, and `config.DISPLAY_FPS`.
 - Keeps only detections whose class name is `shoe`/`shoes`/`footwear`
-  (case-insensitive, see `SHOE_CLASS_NAMES` in `label_live.py`). Box caption
-  looks like `Shoe 0.87`.
+  (case-insensitive, see `SHOE_CLASS_NAMES` in `label_live.py`).
+- Each detected shoe gets a translucent **green** mask (Reuse default) and a
+  caption like `Shoe 0.87`.
+- **Double-click** inside a shoe's mask → flips to **Recycle**, mask flashes
+  **red** for ~0.5s, crop + metadata saved immediately under
+  `OUTPUT_ROOT/incoming<MMDDYYYY>/shoe_Recycle_N.jpg`.
+- When a shoe leaves the frame for `TRACK_EXPIRATION_FRAMES` frames and was
+  never clicked, its last good crop is auto-saved as `shoe_Reuse_N.jpg`.
 - **Keyboard:** `Q` or `ESC` to quit.
-- **Model caveat:** `config.MODEL_PATH` defaults to `yolov8n.pt` (COCO), which
-  has **no shoe class** — `label_live.py` prints a startup warning and detects
-  nothing. For real shoe detection, set `MODEL_PATH = "yolov8m-oiv7.pt"`
-  (Open Images V7, class "Footwear") in `config.py`.
-- Detection/display only: no labeling, saving, tracking, or color yet.
+- **Model requirement:** `MODEL_PATH` must point to a model that has a shoe
+  class. Plain COCO (`yolov8n.pt`) has none and will detect nothing. Use
+  `yolov8m-oiv7.pt` (Open Images V7, class "Footwear"). A startup warning is
+  printed if the loaded model has no shoe-like class.
 
 ## Phase roadmap
 
 1. **Foundation + camera support** — `config.py`, `camera_utils.py`,
    `list_cameras.py`; cross-platform camera access. **Done.**
-2. **Live detection UI** — `label_live.py` + `ui_utils.py`, boxes + confidence + FPS, no saving. **Done.**
-3. **Tracking + labeling** — stable IDs, default Reuse, double-click → Recycle, finalize on exit.
-4. **Dataset storage** — `save_utils.py`, crops + JSON, dated folders, safe numbering.
+2. **Live detection UI** — `label_live.py` + `ui_utils.py`, masks + confidence + FPS. **Done.**
+3. **Tracking + labeling** — stable IDs, default Reuse, double-click → Recycle, finalize on exit. **Done.**
+4. **Dataset storage** — `save_utils.py`, crops + JSON, dated folders, safe numbering. **Done.**
 5. **Color detection** — broad categories only, lightweight, fail-safe.
 6. **Dataset quality tools** — dedup, blur detection, confidence filtering, review mode.
 7. **Future training pipeline** — YOLO fine-tuning / classification (not started).
 
-**Current state:** Phases 1–2 complete. Cross-platform camera support
-(`camera_utils.py`, `list_cameras.py`) and a live YOLO detection UI
-(`label_live.py` + `ui_utils.py`) are working. `tracking_utils`, `save_utils`,
-and `color_utils` remain docstring-only placeholders. No double-click labeling,
-tracking finalization, dataset saving, or color detection is implemented yet.
+**Current state:** Phases 1–4 complete. Live detection, IoU tracking,
+double-click Recycle labeling, frame-exit Reuse auto-save, and dataset
+storage (crops + metadata JSON in dated folders) all work. `color_utils.py`
+remains a docstring-only placeholder (Phase 5).
 
 ## Setup
 
