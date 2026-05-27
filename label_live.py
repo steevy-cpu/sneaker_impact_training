@@ -157,8 +157,11 @@ def main():
             shoes = shoes[:config.MAX_DETECTIONS]
 
             # --- Tracker update -----------------------------------------
+            # Hand the tracker a CLEAN copy of the frame so the saved crops
+            # don't contain the green/red mask we're about to paint onto the
+            # display copy. (draw_detection_mask is in-place on its argument.)
             detections = [(bbox, conf) for conf, bbox in shoes]
-            active = TRACKER.update(detections, frame)
+            active = TRACKER.update(detections, frame.copy())
 
             # --- Pending Recycle saves (from mouse double-clicks) -------
             while PENDING_RECYCLE_SAVES:
