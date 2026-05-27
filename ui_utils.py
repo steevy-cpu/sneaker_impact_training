@@ -22,7 +22,7 @@ FONT = cv2.FONT_HERSHEY_SIMPLEX
 MASK_ALPHA = 0.4   # 0 = invisible, 1 = solid green; 0.4 lets the shoe show through
 
 
-def grabcut_polygon(image, bbox, iters=3, min_area_frac=0.10, simplify=0.005):
+def grabcut_polygon(image, bbox, iters=None, min_area_frac=0.10, simplify=0.005):
     """Run GrabCut on a padded crop around `bbox` and return a polygon.
 
     Returns a numpy contour of shape (N, 1, 2) in absolute frame coordinates,
@@ -37,6 +37,8 @@ def grabcut_polygon(image, bbox, iters=3, min_area_frac=0.10, simplify=0.005):
     try:
         if image is None or image.size == 0:
             return None
+        if iters is None:
+            iters = int(getattr(config, "GRABCUT_ITERS", 1))
         h, w = image.shape[:2]
         x1, y1, x2, y2 = [int(v) for v in bbox]
         x1 = max(0, min(x1, w - 1))

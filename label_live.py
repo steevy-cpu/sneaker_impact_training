@@ -40,7 +40,7 @@ from ultralytics import YOLO
 import config
 from camera_utils import open_camera, release_camera
 from save_utils import save_shoe
-from tracking_utils import ShoeTracker
+from tracking_utils import ShoeTracker, iou
 from ui_utils import (GREEN, RED, draw_detection_mask, draw_fps,
                       draw_status_text, grabcut_polygon)
 
@@ -69,9 +69,44 @@ PENDING_RECYCLE_SAVES = []    # list of ShoeTrack waiting for Recycle save
 # direction is protected by its own lock so neither side blocks the other.
 _FRAME_LOCK = threading.Lock()
 _LATEST_FRAME = [None]                  # numpy frame, written by main
+_LATEST_FRAME_ID = [0]                  # ticked by main per camera frame
 _DETECTIONS_LOCK = threading.Lock()
 _LATEST_DETECTIONS = [[]]               # list of (bbox, conf, polygon) tuples
 _WORKER_RUNNING = threading.Event()     # set while the worker should loop
+
+
+def pick_device():
+    """Choose the YOLO inference device: MPS on Apple Silicon, else CPU.
+
+    Honors `config.YOLO_DEVICE` -- "auto" probes MPS; anything else is used
+    verbatim (e.g. "cpu", "mps", "cuda:0"). Falls back to "cpu" on any
+    probe failure so a bad torch install can't break startup.
+    """
+    pref = getattr(config, "YOLO_DEVICE", "auto")
+    if pref and pref != "auto":
+        return pref
+    try:
+        import torch                              # type: ignore
+        mps = getattr(torch.backends, "mps", None)
+        if mps is not None and mps.is_available():
+            return "mps"
+    except Exception:                              # noqa: BLE001
+        pass
+    return "cpu"
+
+
+def _translate_polygon(polygon, old_bbox, new_bbox):
+    """Shift a cached polygon to follow a bbox that moved between cycles."""
+    ox1, oy1, ox2, oy2 = old_bbox
+    nx1, ny1, nx2, ny2 = new_bbox
+    dx = int(((nx1 + nx2) - (ox1 + ox2)) / 2)
+    dy = int(((ny1 + ny2) - (oy1 + oy2)) / 2)
+    if dx == 0 and dy == 0:
+        return polygon
+    moved = polygon.copy()
+    moved[:, :, 0] += dx
+    moved[:, :, 1] += dy
+    return moved
 
 
 def is_shoe(class_name):
@@ -107,16 +142,42 @@ def detector_worker(model):
 
     Posts a list of `(bbox, conf, polygon)` to _LATEST_DETECTIONS each cycle.
     Polygon is None if GrabCut failed or is disabled in config.
+
+    Optimizations:
+      * Inference device auto-picks MPS on Apple Silicon (much faster than CPU).
+      * YOLO `imgsz` shrinks the network input (config.YOLO_IMGSZ).
+      * Polygon cache: if a detected bbox overlaps a recently-cached one by
+        IoU >= 0.5, we reuse that polygon (translated to the new center)
+        instead of re-running GrabCut. Cache entries refresh every
+        `config.GRABCUT_REFRESH_CYCLES` cycles so shape changes catch up.
+      * Skip a cycle entirely when the camera hasn't produced a new frame --
+        no point re-inferring on the same pixels.
     """
+    device = pick_device()
+    imgsz = int(getattr(config, "YOLO_IMGSZ", 416))
+    refresh = max(1, int(getattr(config, "GRABCUT_REFRESH_CYCLES", 8)))
+    print(f"[detector] device={device}  imgsz={imgsz}  "
+          f"grabcut={'on' if config.ENABLE_GRABCUT else 'off'} "
+          f"iters={getattr(config, 'GRABCUT_ITERS', 1)} "
+          f"refresh_every={refresh}")
+
+    # poly_cache: list of {'bbox': tuple, 'polygon': ndarray, 'age': int}.
+    poly_cache = []
+    last_frame_id = -1
+
     while _WORKER_RUNNING.is_set():
         with _FRAME_LOCK:
             frame = _LATEST_FRAME[0]
-        if frame is None:
+            frame_id = _LATEST_FRAME_ID[0]
+        if frame is None or frame_id == last_frame_id:
             time.sleep(0.005)
             continue
+        last_frame_id = frame_id
 
         try:
-            result = model.predict(frame, conf=config.CONFIDENCE_THRESHOLD,
+            result = model.predict(frame,
+                                   conf=config.CONFIDENCE_THRESHOLD,
+                                   imgsz=imgsz, device=device,
                                    verbose=False)[0]
             shoes = []
             boxes = result.boxes
@@ -128,10 +189,23 @@ def detector_worker(model):
                 conf = float(boxes.conf[i].item())
                 x1, y1, x2, y2 = boxes.xyxy[i].cpu().numpy().tolist()
                 bbox = (x1, y1, x2, y2)
-                polygon = (grabcut_polygon(frame, bbox)
-                           if getattr(config, "ENABLE_GRABCUT", True) else None)
+
+                polygon = None
+                if getattr(config, "ENABLE_GRABCUT", True):
+                    polygon = _lookup_cache(poly_cache, bbox, refresh)
+                    if polygon is None:
+                        polygon = grabcut_polygon(frame, bbox)
+                        if polygon is not None:
+                            poly_cache.append({"bbox": bbox,
+                                               "polygon": polygon,
+                                               "age": 0})
                 shoes.append((bbox, conf, polygon))
-            # Keep only the top-confidence detections.
+
+            # Age all cache entries; drop stale ones.
+            for ent in poly_cache:
+                ent["age"] += 1
+            poly_cache[:] = [e for e in poly_cache if e["age"] <= refresh * 2]
+
             shoes.sort(key=lambda s: s[1], reverse=True)
             shoes = shoes[:config.MAX_DETECTIONS]
             with _DETECTIONS_LOCK:
@@ -139,6 +213,22 @@ def detector_worker(model):
         except Exception as exc:                   # noqa: BLE001 - never crash worker
             print(f"[detector] ERROR: {exc}")
             time.sleep(0.05)
+
+
+def _lookup_cache(cache, bbox, refresh, iou_threshold=0.5):
+    """Return a cached polygon (translated to the new bbox) if there's a
+    recent-enough entry whose bbox overlaps `bbox` by at least `iou_threshold`.
+    The matching entry's bbox is updated to the new one; its age is unchanged
+    so it still expires on schedule."""
+    for ent in cache:
+        if ent["age"] >= refresh:
+            continue
+        if iou(ent["bbox"], bbox) >= iou_threshold:
+            poly = _translate_polygon(ent["polygon"], ent["bbox"], bbox)
+            ent["bbox"] = bbox
+            ent["polygon"] = poly
+            return poly
+    return None
 
 
 def on_mouse(event, x, y, flags, param):
@@ -216,6 +306,7 @@ def main():
             # Hand the newest frame to the detector worker.
             with _FRAME_LOCK:
                 _LATEST_FRAME[0] = frame.copy()
+                _LATEST_FRAME_ID[0] += 1
 
             # Read the latest detections (may be from a slightly older frame).
             with _DETECTIONS_LOCK:
