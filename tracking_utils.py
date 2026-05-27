@@ -2,27 +2,49 @@
 tracking_utils.py -- lightweight shoe tracking.
 
 Each detected shoe gets a stable integer ID while it stays in frame, so the
-operator's double-click "Recycle" decision sticks to the right shoe across
-frames. When a shoe disappears for `config.TRACK_EXPIRATION_FRAMES` frames it
-is considered "gone" and returned from expire(), so the caller can finalize
-any save it owes (e.g. auto-save a Reuse shoe).
+operator's "Recycle" click sticks to the right shoe across frames. When a
+shoe disappears for `config.TRACK_EXPIRATION_FRAMES` frames it is considered
+"gone" and returned from expire(), so the caller can finalize any save it
+owes (e.g. auto-save a Reuse shoe).
+
+We also remember the *sharpest* frame the track has been seen in (variance
+of Laplacian on its crop). save_shoe is called with that frame so motion
+blur from a shoe entering/leaving the frame doesn't ruin the saved image.
 
 Matching is greedy by IoU (Intersection-over-Union) -- no neural net, no
 heavyweight tracker. That's plenty for shoes moving through a static scene.
 """
+import cv2
+
+def sharpness(image):
+    """Variance of the Laplacian -- higher = sharper. Returns 0 on failure.
+
+    Cheap blur metric used to pick the best frame to save per track.
+    """
+    try:
+        if image is None or image.size == 0:
+            return 0.0
+        gray = (cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                if image.ndim == 3 else image)
+        return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    except Exception:                              # noqa: BLE001
+        return 0.0
+
 
 class ShoeTrack:
     """One tracked shoe -- everything the rest of the app needs to know about it.
 
     Fields:
-        id          unique integer ID, stays the same across frames
-        bbox        latest (x1, y1, x2, y2) in pixels
-        last_seen   the frame index in which this track was last matched
-        status      "Reuse" by default; flipped to "Recycle" by a double-click
-        saved       True once the crop+JSON have been written to disk
-        flash_until time.time() value: while now() < flash_until, draw red mask
-        last_frame  the most recent full frame this shoe appeared in (for save)
-        last_conf   the most recent YOLO confidence for this track
+        id              unique integer ID, stays the same across frames
+        bbox            latest (x1, y1, x2, y2) in pixels
+        last_seen       the frame index in which this track was last matched
+        status          "Reuse" by default; flipped to "Recycle" on click
+        saved           True once the crop+JSON have been written to disk
+        flash_until     while time.time() < this, draw red mask
+        last_conf       the most recent YOLO confidence for this track
+        best_frame      the sharpest full frame this shoe appeared in
+        best_bbox       the bbox that corresponds to best_frame
+        best_sharpness  variance-of-Laplacian score of best_frame's crop
     """
 
     def __init__(self, track_id, bbox, frame_idx, frame, conf):
@@ -32,8 +54,12 @@ class ShoeTrack:
         self.status = "Reuse"
         self.saved = False
         self.flash_until = 0.0
-        self.last_frame = frame
         self.last_conf = conf
+        # Best (sharpest) snapshot seen so far -- initialized to this frame
+        # and updated by ShoeTracker._update_best on every match.
+        self.best_frame = frame
+        self.best_bbox = bbox
+        self.best_sharpness = 0.0
 
 
 def iou(a, b):
@@ -69,8 +95,9 @@ class ShoeTracker:
         """Advance one frame.
 
         detections: list of (bbox, confidence). bbox is (x1, y1, x2, y2).
-        frame:      the current full frame (kept on each matched track so we
-                    can save its last good crop if it later expires as Reuse).
+        frame:      the current full frame. Each matched track may keep this
+                    frame as its `best_frame` if its crop is sharper than any
+                    previous one seen for that shoe.
 
         Returns the list of currently active tracks.
         """
@@ -91,18 +118,35 @@ class ShoeTracker:
                 bbox, conf = detections[best_i]
                 track.bbox = bbox
                 track.last_seen = self.frame_idx
-                track.last_frame = frame
                 track.last_conf = conf
+                self._update_best(track, frame, bbox)
                 unmatched_det.remove(best_i)
 
         # Anything left is a new shoe.
         for i in unmatched_det:
             bbox, conf = detections[i]
             t = ShoeTrack(self.next_id, bbox, self.frame_idx, frame, conf)
+            self._update_best(t, frame, bbox)
             self.tracks[self.next_id] = t
             self.next_id += 1
 
         return list(self.tracks.values())
+
+    def _update_best(self, track, frame, bbox):
+        """Replace track.best_frame if this frame's crop is sharper."""
+        h, w = frame.shape[:2]
+        x1, y1, x2, y2 = [int(v) for v in bbox]
+        x1 = max(0, min(x1, w - 1))
+        y1 = max(0, min(y1, h - 1))
+        x2 = max(0, min(x2, w))
+        y2 = max(0, min(y2, h))
+        if x2 <= x1 or y2 <= y1:
+            return
+        s = sharpness(frame[y1:y2, x1:x2])
+        if s > track.best_sharpness:
+            track.best_sharpness = s
+            track.best_frame = frame
+            track.best_bbox = bbox
 
     def expire(self):
         """Pop tracks not seen for `expiration_frames` frames and return them.

@@ -5,11 +5,12 @@ What it does each frame:
   1. Reads a frame from the camera (camera_utils).
   2. Runs YOLO and keeps detections whose class name is in SHOE_CLASS_NAMES.
   3. Feeds those detections to a lightweight IoU tracker (tracking_utils), so
-     each shoe keeps a stable ID while it's on screen.
+     each shoe keeps a stable ID while it's on screen. The tracker also
+     remembers the sharpest frame per shoe, so saves don't get motion blur.
   4. Draws a translucent mask over each tracked shoe -- GREEN for "Reuse"
-     (default), briefly RED for "Recycle" right after a double-click.
-  5. On a left double-click inside a shoe's mask, flips that shoe to "Recycle"
-     and saves its crop + metadata JSON immediately (save_utils).
+     (default), briefly RED for "Recycle" right after a click.
+  5. On a left click inside a shoe's mask, flips that shoe to "Recycle" and
+     saves its sharpest crop + metadata JSON immediately (save_utils).
   6. When a shoe has been gone for config.TRACK_EXPIRATION_FRAMES frames and
      was never clicked, auto-saves it as "Reuse" and drops the track.
 
@@ -19,8 +20,8 @@ Run:
     python label_live.py
 
 Controls:
-    Double-click on a shoe -> classify it as Recycle and save it
-    Q or ESC               -> quit
+    Click on a shoe -> classify it as Recycle and save it
+    Q or ESC        -> quit
 """
 import time
 
@@ -82,16 +83,24 @@ def load_model(path):
 
 
 def on_mouse(event, x, y, flags, param):
-    """Mouse callback. Double-click inside a shoe -> mark Recycle and save."""
-    if event != cv2.EVENT_LBUTTONDBLCLK:
+    """Mouse callback. Left-click inside a shoe -> mark Recycle and save.
+
+    We use single-click (not double-click) because cv2.EVENT_LBUTTONDBLCLK
+    fires inconsistently on macOS. Since the operator only ever clicks on
+    BAD shoes, single-click is unambiguous.
+    """
+    if event != cv2.EVENT_LBUTTONDOWN:
         return
     if TRACKER is None:
         return
     track = TRACKER.find_at(x, y)
     if track is None:
+        print(f"[click] ({x}, {y}) -> no shoe here")
         return
     if track.status == "Recycle":
-        return                                       # already flagged
+        print(f"[click] track #{track.id} already Recycle, ignoring")
+        return
+    print(f"[click] track #{track.id} -> Recycle")
     track.status = "Recycle"
     track.flash_until = time.time() + FLASH_DURATION_SEC
     PENDING_RECYCLE_SAVES.append(track)
@@ -127,7 +136,7 @@ def main():
     cv2.setMouseCallback(WINDOW_TITLE, on_mouse)
 
     print(f"Live detection running on '{config.MODEL_PATH}'. "
-          "Double-click a shoe to flag it Recycle. Press Q or ESC to quit.")
+          "Click a shoe to flag it Recycle. Press Q or ESC to quit.")
     prev_time = time.time()
     fps = 0.0
 
@@ -163,12 +172,15 @@ def main():
             detections = [(bbox, conf) for conf, bbox in shoes]
             active = TRACKER.update(detections, frame.copy())
 
-            # --- Pending Recycle saves (from mouse double-clicks) -------
+            # --- Pending Recycle saves (from mouse clicks) --------------
+            # Use best_frame/best_bbox (the sharpest snapshot of this shoe)
+            # rather than the moment-of-click frame, which may be blurry if
+            # the shoe was moving when the operator clicked.
             while PENDING_RECYCLE_SAVES:
                 t = PENDING_RECYCLE_SAVES.pop()
                 if t.saved:
                     continue
-                save_shoe(t.last_frame, t.bbox, "Recycle",
+                save_shoe(t.best_frame, t.best_bbox, "Recycle",
                           t.last_conf,
                           model_used=config.MODEL_PATH,
                           tracking_id=t.id)
@@ -178,7 +190,7 @@ def main():
             for ex in TRACKER.expire():
                 if ex.saved or ex.status != "Reuse":
                     continue
-                save_shoe(ex.last_frame, ex.bbox, "Reuse",
+                save_shoe(ex.best_frame, ex.best_bbox, "Reuse",
                           ex.last_conf,
                           model_used=config.MODEL_PATH,
                           tracking_id=ex.id)
@@ -203,7 +215,7 @@ def main():
             shown = len(active)
             status = f"{shown} shoe(s)" if shown else "no shoes"
             draw_status_text(frame,
-                             f"{status}  |  dbl-click=Recycle, Q/ESC=quit")
+                             f"{status}  |  click=Recycle, Q/ESC=quit")
 
             cv2.imshow(WINDOW_TITLE, frame)
             key = cv2.waitKey(1) & 0xFF

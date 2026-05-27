@@ -8,6 +8,8 @@ and Reuse/Recycle color-coding arrive in Phase 3 -- not implemented here.
 """
 import cv2
 
+import config
+
 # Colors are BGR (OpenCV order).
 GREEN = (0, 255, 0)
 RED = (0, 0, 255)
@@ -20,25 +22,40 @@ MASK_ALPHA = 0.4   # 0 = invisible, 1 = solid green; 0.4 lets the shoe show thro
 
 
 def draw_detection_mask(frame, bbox, label, confidence, color=GREEN):
-    """Overlay one detection as a translucent mask filling its bbox.
+    """Overlay one detection as a translucent mask, smaller than its bbox.
 
-    bbox is (x1, y1, x2, y2) in pixels. The rectangle is filled with `color`
-    (default green for Reuse) and alpha-blended onto the frame so the shoe
-    stays visible. Phase 3 callers pass red briefly after a double-click to
-    flash "Recycle" confirmation. A small caption "<label> <confidence>"
-    (e.g. "Shoe 0.87") sits just above the mask in the same color.
+    bbox is (x1, y1, x2, y2) in pixels. We shrink it toward its center by
+    `config.MASK_SHRINK` so the painted mask doesn't overflow onto adjacent
+    shoes (YOLO bboxes tend to include padding around the object). The
+    rectangle is filled with `color` -- default green for Reuse, red briefly
+    after a click for Recycle -- and alpha-blended onto the frame so the
+    shoe stays visible. A small caption "<label> <confidence>" sits just
+    above the shrunk mask in the same color.
+
+    NOTE: this shrink is purely cosmetic. Click hit-testing (in tracking_utils
+    ShoeTracker.find_at) still uses the full bbox, so the click target is
+    forgiving even when the visible mask is small.
     """
     x1, y1, x2, y2 = [int(v) for v in bbox]
 
-    # Alpha-blend a filled rectangle over only the bbox region.
-    region = frame[y1:y2, x1:x2]
+    # Shrink the rectangle toward its center for drawing only.
+    shrink = max(0.05, min(1.0, getattr(config, "MASK_SHRINK", 1.0)))
+    cx = (x1 + x2) // 2
+    cy = (y1 + y2) // 2
+    half_w = int((x2 - x1) * shrink / 2)
+    half_h = int((y2 - y1) * shrink / 2)
+    mx1, my1 = cx - half_w, cy - half_h
+    mx2, my2 = cx + half_w, cy + half_h
+
+    # Alpha-blend a filled rectangle over the shrunk region.
+    region = frame[my1:my2, mx1:mx2]
     if region.size:                                # skip degenerate (0-area) boxes
         layer = region.copy()
         layer[:] = color
         cv2.addWeighted(layer, MASK_ALPHA, region, 1 - MASK_ALPHA, 0, region)
 
     text = f"{label} {confidence:.2f}"
-    cv2.putText(frame, text, (x1, max(y1 - 8, 14)), FONT, 0.6, color, 2)
+    cv2.putText(frame, text, (mx1, max(my1 - 8, 14)), FONT, 0.6, color, 2)
     return frame
 
 

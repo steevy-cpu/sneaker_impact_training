@@ -42,4 +42,7 @@ TRACK_EXPIRATION_FRAMES = 60         # frames a shoe may be missing before save
                                      # this if shoes auto-save as Reuse before
                                      # the operator has time to double-click)
 TRACK_IOU_THRESHOLD = 0.3            # min IoU to match a detection to a track
+MASK_SHRINK = 0.7                    # draw mask at this fraction of bbox size,
+                                     # centered, so adjacent shoes stay visible
+                                     # (click target still uses the full bbox)
 DISPLAY_FPS = True                   # draw an FPS overlay on the live feed
