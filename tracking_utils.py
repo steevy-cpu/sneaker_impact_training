@@ -117,7 +117,10 @@ class ShoeTracker:
             return d[0], d[1], None
 
         # Greedy match: for each existing track, take the best-IoU detection.
+        # Skip saved tracks -- they're done and must not absorb new detections.
         for track in self.tracks.values():
+            if track.saved:
+                continue
             best_i = -1
             best_iou = 0.0
             for i in unmatched_det:

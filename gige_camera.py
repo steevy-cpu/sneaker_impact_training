@@ -61,6 +61,13 @@ _BAYER_TO_BGR = {
     "BayerBG8": cv2.COLOR_BayerBG2BGR,
 }
 
+# config.GIGE_BAYER_OVERRIDE lets you swap the Bayer decode without touching
+# this file -- useful when the camera reports the wrong pattern.
+if config.GIGE_BAYER_OVERRIDE and config.GIGE_BAYER_OVERRIDE in _BAYER_TO_BGR:
+    _BAYER_TO_BGR = {k: _BAYER_TO_BGR[config.GIGE_BAYER_OVERRIDE]
+                     for k in _BAYER_TO_BGR}
+    print(f"[gige] Bayer override active: all formats -> {config.GIGE_BAYER_OVERRIDE}")
+
 
 class AravisCapture:
     """Minimal cv2.VideoCapture look-alike backed by an Aravis GigE camera.
@@ -95,12 +102,26 @@ class AravisCapture:
         if not self._opened:
             return False, None
         try:
-            # Wait up to 1 second (timeout is in microseconds) for a frame.
-            buffer = self._stream.timeout_pop_buffer(1_000_000)
+            # Drain any stale buffers that piled up during slow processing
+            # (e.g. YOLO inference). Keep only the freshest one so the live
+            # view stays current instead of replaying seconds-old frames.
+            buffer = self._stream.try_pop_buffer()
+            while buffer is not None:
+                next_buf = self._stream.try_pop_buffer()
+                if next_buf is None:
+                    break
+                self._stream.push_buffer(buffer)
+                buffer = next_buf
+
+            # Nothing was immediately available -- wait up to 1 second.
+            if buffer is None:
+                buffer = self._stream.timeout_pop_buffer(1_000_000)
             if buffer is None:
                 return False, None
             try:
                 if buffer.get_status() != Aravis.BufferStatus.SUCCESS:
+                    # Bad frame (e.g. dropped packet during buffer starvation).
+                    # Return False but don't crash -- caller can retry next tick.
                     return False, None
                 frame = self._to_bgr(buffer)
                 return (frame is not None), frame
@@ -118,6 +139,11 @@ class AravisCapture:
         h = buffer.get_image_height() or self._height
         raw = np.frombuffer(buffer.get_data(), dtype=np.uint8)
         fmt = self._pixel_format
+
+        # Use actual received bytes to determine width — the camera may ignore
+        # ROI changes and send a different width than what the API reports.
+        if h > 0 and raw.size >= h:
+            w = raw.size // h
 
         # Bayer (single raw plane that we debayer into color).
         if fmt in _BAYER_TO_BGR:
@@ -202,6 +228,30 @@ def open_gige_camera():
         # ("gv") devices have this knob.
         if camera.is_gv_device() and config.GIGE_PACKET_SIZE > 0:
             camera.gv_set_packet_size(config.GIGE_PACKET_SIZE)
+
+        # Reset ROI to full sensor so a previously-set partial region doesn't
+        # silently crop the image or corrupt the frame geometry.
+        try:
+            sensor_w = camera.get_integer("WidthMax")
+            sensor_h = camera.get_integer("HeightMax")
+            camera.set_region(0, 0, sensor_w, sensor_h)
+            print(f"[gige] ROI reset to full sensor: {sensor_w}x{sensor_h}.")
+        except Exception as exc:
+            print(f"[gige] Warning: could not reset ROI: {exc}")
+
+        if config.GIGE_FPS > 0:
+            try:
+                camera.set_frame_rate(config.GIGE_FPS)
+                print(f"[gige] Frame rate capped at {config.GIGE_FPS} fps.")
+            except Exception as exc:
+                print(f"[gige] Warning: could not set frame rate: {exc}")
+
+        try:
+            camera.set_exposure_time(config.GIGE_EXPOSURE_US)
+            camera.set_gain(config.GIGE_GAIN)
+            print(f"[gige] Exposure: {config.GIGE_EXPOSURE_US} us, Gain: {config.GIGE_GAIN}")
+        except Exception as exc:
+            print(f"[gige] Warning: could not set exposure/gain: {exc}")
 
         _x, _y, width, height = camera.get_region()
         pixel_format = camera.get_pixel_format_as_string()

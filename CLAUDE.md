@@ -16,8 +16,8 @@ final automated sorting AI. Human labeling accuracy matters more than automation
 
 The operator watches a live camera feed; YOLO draws bounding boxes on shoes.
 
-- A detected shoe defaults to **Reuse**.
-- If the operator **double-clicks inside a shoe's box**, it becomes **Recycle**.
+- A detected shoe defaults to **Reuse** (green box).
+- If the operator **clicks inside a shoe's box**, it becomes **Recycle** (turns red).
 - When the shoe leaves the frame (tracking expires), its crop + metadata JSON
   are saved automatically.
 
@@ -30,7 +30,7 @@ LIVE CAMERA FEED -> YOLO DETECTION -> BBOX DISPLAY -> (optional COLOR) ->
 DEFAULT LABEL = REUSE -> DOUBLE-CLICK IF BAD -> AUTO-SAVE IMAGE + METADATA
 ```
 
-Module responsibilities (most are placeholders until their phase lands):
+Module responsibilities:
 
 | File | Role | Phase |
 |------|------|-------|
@@ -38,12 +38,14 @@ Module responsibilities (most are placeholders until their phase lands):
 | `camera_utils.py` | Cross-platform camera open (AVFoundation/DSHOW/default); routes to GigE when enabled. | done |
 | `gige_camera.py` | Aravis backend for the GigE Vision camera (Photon Focus); cv2.VideoCapture look-alike. | done |
 | `list_cameras.py` | Probe which camera indices are usable. | done |
-| `ui_utils.py` | Translucent green/red masks, FPS, status. | done |
+| `ui_utils.py` | Green/red bounding boxes, FPS, status overlay. | done |
 | `label_live.py` | Main app: camera + display + mouse + tracker + saves. | done |
 | `detector_utils.py` | Async YOLO + GrabCut worker thread (DetectorThread). | done |
 | `tracking_utils.py` | Lightweight IoU shoe tracking + expiry. | done |
 | `save_utils.py` | Save crops + metadata JSON into dated folders. | done |
 | `color_utils.py` | Broad dominant-color estimate; must fail safe. | done |
+| `dataset_clean.py` | Batch quality cleaner: blur, confidence, dedup filters. | done |
+| `dataset_review.py` | Interactive visual reviewer: keep / delete / relabel per shoe. | done |
 | `capture.py` | Original key-driven dataset capture tool (preserved). | existing |
 | `detect_test.py` | Original detector diagnostic (preserved). | existing |
 
@@ -68,16 +70,20 @@ Module responsibilities (most are placeholders until their phase lands):
 
 ```
 sneaker_impact/pictures/incoming<MMDDYYYY>/
-    shoe_Reuse_1.jpg     shoe_Reuse_1.json
-    shoe_Recycle_1.jpg   shoe_Recycle_1.json
+    shoe_Reuse_black_1.jpg     shoe_Reuse_black_1.json
+    shoe_Recycle_white_1.jpg   shoe_Recycle_white_1.json
 ```
+
+Filename convention: `shoe_<classification>_<color>_<N>.jpg`. Color is
+detected before the file is written so it becomes part of the name. Falls
+back to `unknown` if color detection is disabled or fails.
 
 Per-class counter (Reuse and Recycle have separate sequences), restart-safe
 (scans existing files to pick the next number), fresh folder per day.
 
 Metadata JSON fields: `filename, classification, shoe_number, timestamp,
-detected_color (null until Phase 5), color_confidence (null until Phase 5),
-yolo_confidence, bbox, tracking_id, frame_width, frame_height, model_used`.
+detected_color, color_confidence, yolo_confidence, bbox, tracking_id,
+frame_width, frame_height, model_used`.
 
 ## Engineering rules
 
@@ -130,13 +136,13 @@ python label_live.py       # opens "Sneaker Impact - Live Detection"
   `config.TRACK_IOU_THRESHOLD`, `config.OUTPUT_ROOT`, and `config.DISPLAY_FPS`.
 - Keeps only detections whose class name is `shoe`/`shoes`/`footwear`
   (case-insensitive, see `SHOE_CLASS_NAMES` in `label_live.py`).
-- Each detected shoe gets a translucent **green** mask (Reuse default) and a
+- Each detected shoe gets a **green** bounding box (Reuse default) and a
   caption like `Shoe 0.87`.
-- **Double-click** inside a shoe's mask → flips to **Recycle**, mask flashes
-  **red** for ~0.5s, crop + metadata saved immediately under
-  `OUTPUT_ROOT/incoming<MMDDYYYY>/shoe_Recycle_N.jpg`.
+- **Click** inside a shoe's box → flips to **Recycle**, box turns **red**
+  permanently, crop + metadata saved immediately under
+  `OUTPUT_ROOT/incoming<MMDDYYYY>/shoe_Recycle_<color>_N.jpg`.
 - When a shoe leaves the frame for `TRACK_EXPIRATION_FRAMES` frames and was
-  never clicked, its last good crop is auto-saved as `shoe_Reuse_N.jpg`.
+  never clicked, its last good crop is auto-saved as `shoe_Reuse_<color>_N.jpg`.
 - **Keyboard:** `Q` or `ESC` to quit.
 - **Model requirement:** `MODEL_PATH` must point to a model that has a shoe
   class. Plain COCO (`yolov8n.pt`) has none and will detect nothing. Use
@@ -147,18 +153,15 @@ python label_live.py       # opens "Sneaker Impact - Live Detection"
 
 1. **Foundation + camera support** — `config.py`, `camera_utils.py`,
    `list_cameras.py`; cross-platform camera access. **Done.**
-2. **Live detection UI** — `label_live.py` + `ui_utils.py`, masks + confidence + FPS. **Done.**
-3. **Tracking + labeling** — stable IDs, default Reuse, double-click → Recycle, finalize on exit. **Done.**
+2. **Live detection UI** — `label_live.py` + `ui_utils.py`, bounding boxes + confidence + FPS. **Done.**
+3. **Tracking + labeling** — stable IDs, default Reuse, click → Recycle, finalize on exit. **Done.**
 4. **Dataset storage** — `save_utils.py`, crops + JSON, dated folders, safe numbering. **Done.**
 5. **Color detection** — broad categories only, lightweight, fail-safe. **Done.**
-6. **Dataset quality tools** — dedup, blur detection, confidence filtering, review mode.
-7. **Future training pipeline** — YOLO fine-tuning / classification (not started).
+6. **Dataset quality tools** — blur filter, confidence filter, dedup, visual review. **Done.**
+7. **Future training pipeline** — out of scope for this repository.
 
-**Current state:** Phases 1–5 complete. Live detection (YOLO-World or
-OIV7), IoU tracking, click-Recycle labeling, frame-exit Reuse auto-save,
-dataset storage (crops + metadata JSON in dated folders), and broad-
-category color detection (HSV-based, polygon-aware) all work. Phase 6
-(dataset quality tools) is the next planned step.
+**Current state:** Phases 1–6 complete. The system collects, labels, and
+cleans a shoe dataset ready for external training.
 
 Color detection details: `classify_color(image, mask=None)` in
 `color_utils.py` returns `(name, confidence)` for one of 11 broad
@@ -168,6 +171,21 @@ purple, pink (or "unknown" on failure). Gated by
 using the GrabCut polygon when available to ignore background pixels.
 Thresholds (`_V_BLACK`, `_V_WHITE`, `_S_GRAY`, `_V_BROWN`) are tunable
 constants at the top of `color_utils.py`.
+
+## Dataset quality tools (Phase 6)
+
+```bash
+python dataset_clean.py --dry-run        # preview what would be removed
+python dataset_clean.py                  # remove blurry, low-conf, duplicates
+python dataset_clean.py --blur 80        # stricter blur threshold
+python dataset_clean.py --conf 0.5       # stricter confidence threshold
+python dataset_clean.py --folder incoming05292026   # single folder only
+
+QT_QPA_PLATFORM=xcb python dataset_review.py        # visual review
+```
+
+`dataset_review.py` controls: `SPACE` = keep, `D` = delete, `R` = flip
+Reuse↔Recycle, `←` = go back, `Q`/`ESC` = quit.
 
 ## GigE Vision camera (Photon Focus, via Aravis)
 

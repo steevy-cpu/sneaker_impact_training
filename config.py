@@ -38,6 +38,17 @@ GIGE_PACKET_SIZE = 1440    # GVSP stream packet size (bytes). Keep <= 1500 on
                            # ZERO frames. On a real Gigabit NIC with jumbo
                            # frames you can raise it (e.g. 8192) for throughput.
                            # 0 = leave the camera's current packet size as-is.
+GIGE_FPS = 10.0            # Cap the camera's frame rate. Industrial cameras can
+                           # do 50-200 fps; Pi 5 YOLO is ~1-5 fps, so stream
+                           # buffers exhaust instantly without a cap. 10 gives a
+                           # smooth live view while staying ahead of inference.
+                           # 0 = leave the camera's current frame rate as-is.
+GIGE_BAYER_OVERRIDE = "BayerGB8"
+GIGE_EXPOSURE_US = 60000   # exposure in microseconds (60ms). Increase if too dark.
+GIGE_GAIN = 1.0            # sensor gain (1.0 = minimum noise). Avoid >2 on CMV2000.   # Force a specific Bayer-to-BGR conversion to fix
+                           # wrong colors. Options: "BayerGB8", "BayerRG8",
+                           # "BayerGR8", "BayerBG8". Empty = use what the
+                           # camera reports (BayerGB8 by default).
 
 # --- Detection ------------------------------------------------------------
 # Two model families are supported:
@@ -46,22 +57,22 @@ GIGE_PACKET_SIZE = 1440    # GVSP stream packet size (bytes). Keep <= 1500 on
 #    shoes, etc.) because it understands text labels, not just a single
 #    "Footwear" bucket. Small variant chosen for Pi 5 / Jetson Nano viability.
 #  - USE_YOLO_WORLD=False: standard YOLO with MODEL_PATH (default OIV7 medium).
-USE_YOLO_WORLD = True
+USE_YOLO_WORLD = False
 YOLO_WORLD_MODEL = "yolov8s-worldv2.pt"   # ~28MB, runs on Pi 5 / Jetson Nano
 YOLO_WORLD_CLASSES = [                    # prompts -- tune freely
     "shoe", "sneaker", "running shoe", "boot", "sandal",
     "flip flop", "high heel", "toe shoe", "athletic shoe", "loafer",
 ]
 
-MODEL_PATH = "yolov8m-oiv7.pt"       # used when USE_YOLO_WORLD=False
+MODEL_PATH = "yolov8m-oiv7.onnx"       # used when USE_YOLO_WORLD=False
 CONFIDENCE_THRESHOLD = 0.5           # minimum YOLO confidence to keep a box
 MAX_DETECTIONS = 5                   # cap on shoes processed per frame
-YOLO_IMGSZ = 416                     # YOLO input size; default ultralytics
+YOLO_IMGSZ = 320                     # YOLO input size; default ultralytics
                                      # uses 640. 416 is ~1.5x faster with a
                                      # small accuracy hit; 320 even faster.
 YOLO_DEVICE = "auto"                 # "auto" (MPS on Apple Silicon else CPU),
                                      # or pin to "cpu" / "mps" / "cuda:0"
-ENABLE_GRABCUT = True                # run GrabCut on each bbox to get a
+ENABLE_GRABCUT = False                # run GrabCut on each bbox to get a
                                      # shoe-shaped polygon for the live mask;
                                      # set False if it's too slow/noisy
 GRABCUT_ITERS = 1                    # GrabCut iterations; 1 is usually enough,

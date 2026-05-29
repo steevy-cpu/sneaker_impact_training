@@ -94,50 +94,17 @@ def grabcut_polygon(image, bbox, iters=None, min_area_frac=0.10, simplify=0.005)
 
 def draw_detection_mask(frame, bbox, label, confidence, color=GREEN,
                         polygon=None):
-    """Overlay one detection as a translucent mask.
+    """Draw a solid rectangle around one detected shoe.
 
-    If `polygon` (numpy contour of shape (N, 1, 2)) is provided, fill that
-    polygon -- the mask will follow the shoe's outline from GrabCut. If
-    `polygon` is None, fall back to a shrunk rectangle inside `bbox` (since
-    YOLO bboxes overhang the shoe; see `config.MASK_SHRINK`).
-
-    Click hit-testing in tracking_utils still uses the full bbox, so even
-    when the visible mask is shrunk or polygon-shaped, clicks anywhere
-    inside the bbox count as hitting the shoe.
+    Green = Reuse (default), Red = Recycle. The label and confidence score
+    are printed just above the top-left corner of the box.
+    Click hit-testing uses the same full bbox, so double-clicking anywhere
+    inside the rectangle flags the shoe as Recycle.
     """
-    # Polygon path: shape-following mask.
-    if polygon is not None and len(polygon) >= 3:
-        poly_int = polygon.astype(np.int32)
-        overlay = frame.copy()
-        cv2.fillPoly(overlay, [poly_int], color)
-        cv2.addWeighted(overlay, MASK_ALPHA, frame, 1 - MASK_ALPHA, 0, frame)
-        cv2.polylines(frame, [poly_int], True, color, 2)
-        # Label at the polygon's top-left.
-        px, py, _, _ = cv2.boundingRect(poly_int)
-        text = f"{label} {confidence:.2f}"
-        cv2.putText(frame, text, (px, max(py - 8, 14)), FONT, 0.6, color, 2)
-        return frame
-
     x1, y1, x2, y2 = [int(v) for v in bbox]
-
-    # Shrink the rectangle toward its center for drawing only.
-    shrink = max(0.05, min(1.0, getattr(config, "MASK_SHRINK", 1.0)))
-    cx = (x1 + x2) // 2
-    cy = (y1 + y2) // 2
-    half_w = int((x2 - x1) * shrink / 2)
-    half_h = int((y2 - y1) * shrink / 2)
-    mx1, my1 = cx - half_w, cy - half_h
-    mx2, my2 = cx + half_w, cy + half_h
-
-    # Alpha-blend a filled rectangle over the shrunk region.
-    region = frame[my1:my2, mx1:mx2]
-    if region.size:                                # skip degenerate (0-area) boxes
-        layer = region.copy()
-        layer[:] = color
-        cv2.addWeighted(layer, MASK_ALPHA, region, 1 - MASK_ALPHA, 0, region)
-
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
     text = f"{label} {confidence:.2f}"
-    cv2.putText(frame, text, (mx1, max(my1 - 8, 14)), FONT, 0.6, color, 2)
+    cv2.putText(frame, text, (x1, max(y1 - 8, 14)), FONT, 0.6, color, 2)
     return frame
 
 

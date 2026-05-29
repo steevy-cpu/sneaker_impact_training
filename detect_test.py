@@ -59,14 +59,17 @@ def run_live(model, cam, conf, imgsz, every):
         while True:
             ok, frame = cap.read()
             if not ok:
-                print("Failed to read frame.")
-                break
+                continue
             if frame_idx % max(every, 1) == 0:
                 result = model.predict(frame, conf=conf, imgsz=imgsz, verbose=False)[0]
             frame_idx += 1
-            if result is None:
-                continue
             view = frame.copy()
+            if result is None:
+                cv2.putText(view, "Warming up YOLO...", (10, 28),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+                cv2.imshow("Detection test", view)
+                cv2.waitKey(1)
+                continue
             shoe_hits = draw_detections(view, result)
 
             if shoe_hits:

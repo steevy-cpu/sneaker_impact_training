@@ -43,11 +43,12 @@ def folder_for_today(root=None):
 def next_number(folder, classification):
     """Return the next per-class shoe number for `folder`.
 
-    Scans existing `shoe_<classification>_<N>.jpg` files (case-insensitive on
-    the class word) and returns max(N) + 1, defaulting to 1.
+    Scans existing `shoe_<classification>_<color>_<N>.jpg` files and returns
+    max(N) + 1, defaulting to 1. Color may be any word, so we match the number
+    as the last underscore-separated token before .jpg.
     """
     pattern = re.compile(
-        rf"shoe_{re.escape(classification)}_(\d+)\.jpg$",
+        rf"shoe_{re.escape(classification)}_\w+_(\d+)\.jpg$",
         re.IGNORECASE,
     )
     max_n = 0
@@ -106,25 +107,10 @@ def save_shoe(frame, bbox, classification, yolo_confidence,
             return None
         x1, y1, x2, y2 = clipped
 
-        folder = folder_for_today(output_root)
-        n = next_number(folder, classification)
-        base = f"shoe_{classification}_{n}"
-        jpg_path = os.path.join(folder, base + ".jpg")
-        json_path = os.path.join(folder, base + ".json")
-
         crop = frame[y1:y2, x1:x2]
-        if not cv2.imwrite(jpg_path, crop):
-            print(f"[save] ERROR: cv2.imwrite returned False for {jpg_path}.")
-            return None
 
-        if getattr(config, "SAVE_FULL_FRAME", False):
-            cv2.imwrite(os.path.join(folder, base + "_full.jpg"), frame)
-
-        # Optional color detection. Translate the polygon (if provided) from
-        # full-frame coords into crop coords so the mask lines up with the
-        # crop. classify_color is wrapped in try/except so any failure here
-        # is logged but doesn't break the save.
-        detected_color = None
+        # Detect color first -- it becomes part of the filename.
+        detected_color = "unknown"
         color_confidence = None
         if getattr(config, "ENABLE_COLOR_DETECTION", False):
             try:
@@ -140,6 +126,19 @@ def save_shoe(frame, bbox, classification, yolo_confidence,
                 print(f"[save] color detection failed: {exc}")
                 detected_color = "unknown"
                 color_confidence = 0.0
+
+        folder = folder_for_today(output_root)
+        n = next_number(folder, classification)
+        base = f"shoe_{classification}_{detected_color}_{n}"
+        jpg_path = os.path.join(folder, base + ".jpg")
+        json_path = os.path.join(folder, base + ".json")
+
+        if not cv2.imwrite(jpg_path, crop):
+            print(f"[save] ERROR: cv2.imwrite returned False for {jpg_path}.")
+            return None
+
+        if getattr(config, "SAVE_FULL_FRAME", False):
+            cv2.imwrite(os.path.join(folder, base + "_full.jpg"), frame)
 
         metadata = {
             "filename": base + ".jpg",

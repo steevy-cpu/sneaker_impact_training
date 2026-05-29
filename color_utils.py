@@ -46,10 +46,12 @@ _CODE = {name: i for i, name in enumerate(COLOR_NAMES)}
 # Tunable thresholds (HSV in OpenCV's convention).
 _V_BLACK = 50         # value below this -> black, regardless of hue
 _V_WHITE = 180        # value above this AND low saturation -> white
-_S_GRAY = 30          # saturation below this -> gray / white / black axis
-_V_BROWN = 140        # value below this AND reddish hue -> brown
-                      # (raise if oranges leak into brown; lower if browns
-                      #  leak into orange)
+_S_GRAY = 50          # saturation below this -> gray / white / black axis
+                      # (raised from 30 so warm-tinted neutral backgrounds
+                      #  don't leak into orange)
+_V_BROWN = 200        # value below this AND reddish hue -> brown
+                      # (raised from 140: tan/beige/light leather are brown,
+                      #  not orange; true vivid orange still lands in orange)
 
 
 def classify_color(image, mask=None):

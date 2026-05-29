@@ -217,9 +217,16 @@ def main():
                 ex.saved = True
 
             # --- Draw masks ---------------------------------------------
+            # Only draw boxes for tracks actively seen in recent frames.
+            # Tracks linger longer internally (TRACK_EXPIRATION_FRAMES) so
+            # the save logic can capture the best crop, but we don't show a
+            # ghost box after the shoe leaves the camera view.
             now = time.time()
+            draw_cutoff = TRACKER.frame_idx - 5
             for t in active:
-                color = RED if now < t.flash_until else GREEN
+                if t.last_seen < draw_cutoff:
+                    continue
+                color = RED if t.status == "Recycle" else GREEN
                 draw_detection_mask(frame, t.bbox, "Shoe", t.last_conf,
                                     color=color, polygon=t.polygon)
 
