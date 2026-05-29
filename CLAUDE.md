@@ -35,7 +35,8 @@ Module responsibilities (most are placeholders until their phase lands):
 | File | Role | Phase |
 |------|------|-------|
 | `config.py` | All tunables (camera, thresholds, paths, flags). Nothing else hardcodes these. | done |
-| `camera_utils.py` | Cross-platform camera open (AVFoundation/DSHOW/default). | done |
+| `camera_utils.py` | Cross-platform camera open (AVFoundation/DSHOW/default); routes to GigE when enabled. | done |
+| `gige_camera.py` | Aravis backend for the GigE Vision camera (Photon Focus); cv2.VideoCapture look-alike. | done |
 | `list_cameras.py` | Probe which camera indices are usable. | done |
 | `ui_utils.py` | Translucent green/red masks, FPS, status. | done |
 | `label_live.py` | Main app: camera + display + mouse + tracker + saves. | done |
@@ -167,6 +168,41 @@ purple, pink (or "unknown" on failure). Gated by
 using the GrabCut polygon when available to ignore background pixels.
 Thresholds (`_V_BLACK`, `_V_WHITE`, `_S_GRAY`, `_V_BROWN`) are tunable
 constants at the top of `color_utils.py`.
+
+## GigE Vision camera (Photon Focus, via Aravis)
+
+The project is moving off the USB webcam to a **Photon Focus GigE Vision**
+camera (`DR1-D2048x1088C`, BayerGB8). `cv2.VideoCapture` cannot open a GigE
+camera, so `gige_camera.py` wraps the open-source **Aravis** library in an
+`AravisCapture` object that exposes the same `.read()` / `.release()` interface.
+`open_camera()` routes to it when `config.USE_GIGE_CAMERA = True`, so
+`label_live.py` and friends run unchanged.
+
+Enable it:
+
+```python
+# config.py
+USE_GIGE_CAMERA = True
+GIGE_CAMERA_NAME = ""      # "" = first camera Aravis finds, or pin the device id
+GIGE_PACKET_SIZE = 1440    # <= 1500 on USB-Ethernet adapters; raise on jumbo NIC
+```
+
+System deps (NOT in requirements.txt -- they're OS packages, not pip):
+
+```bash
+# Raspberry Pi 5 / Linux (preferred target):
+sudo apt install aravis-tools gir1.2-aravis-0.8 python3-gi
+# macOS dev box (harder): brew install aravis + PyGObject so `import gi` works
+```
+
+Before running the app, prove the camera streams at the driver level:
+`arv-tool-0.8` lists it, `arv-viewer-0.8` shows live frames. The camera needs
+**12V external power** (not PoE) and must share a subnet with the host. Notes:
+- Bayer→BGR uses OpenCV's debayer; OpenCV's Bayer naming doesn't perfectly
+  match GenICam's, so if **red/blue look swapped**, change the camera's entry in
+  `_BAYER_TO_BGR` (top of `gige_camera.py`).
+- Fails safe: if Aravis/`gi` is missing or no camera is found, `open_camera()`
+  returns `None` with an install hint and the app exits cleanly.
 
 ## Detection model: YOLO-World vs OIV7
 

@@ -91,6 +91,18 @@ def open_camera(camera_index=None):
     Prints clear messages and the chosen camera's name. Returns the opened
     cv2.VideoCapture on success, or None on failure.
     """
+    # --- GigE Vision path -------------------------------------------------
+    # When enabled, the camera is an industrial GigE camera that
+    # cv2.VideoCapture can't open. Hand off to the Aravis backend, which
+    # returns an object with the same .read()/.release() interface. The import
+    # is lazy so the normal USB path never needs Aravis/gi installed.
+    if getattr(config, "USE_GIGE_CAMERA", False):
+        from gige_camera import open_gige_camera
+        if camera_index is not None:
+            print("[camera] note: USE_GIGE_CAMERA is on; ignoring camera index "
+                  f"{camera_index} and using the GigE camera.")
+        return open_gige_camera()
+
     # --- Decide which camera to use --------------------------------------
     if camera_index is None:
         by_name = find_camera_index_by_name(config.CAMERA_NAME)

@@ -24,6 +24,21 @@ tracking, saving, and color logic are NOT implemented yet -- later phases.
 CAMERA_NAME = ""           # leave empty; name lookup isn't reliable on macOS
 CAMERA_INDEX = 0           # OpenCV index for the Logitech Webcam C930e here
 
+# --- GigE Vision camera (Photon Focus, via Aravis) ------------------------
+# The GigE industrial camera can't be opened by cv2.VideoCapture. When
+# USE_GIGE_CAMERA is True, open_camera() routes to the Aravis backend in
+# gige_camera.py instead (needs system Aravis + python3-gi -- see that file).
+# False = normal USB/webcam path; leave it False on the Mac dev box.
+USE_GIGE_CAMERA = False
+GIGE_CAMERA_NAME = ""      # Aravis device id, e.g.
+                           # "Photonfocus AG-DR1-D2048x1088C-...-041700019266".
+                           # Empty = use the first GigE camera Aravis finds.
+GIGE_PACKET_SIZE = 1440    # GVSP stream packet size (bytes). Keep <= 1500 on
+                           # USB-Ethernet adapters (no jumbo frames) or you get
+                           # ZERO frames. On a real Gigabit NIC with jumbo
+                           # frames you can raise it (e.g. 8192) for throughput.
+                           # 0 = leave the camera's current packet size as-is.
+
 # --- Detection ------------------------------------------------------------
 # Two model families are supported:
 #  - USE_YOLO_WORLD=True: YOLO-World (open-vocabulary), prompted with the
