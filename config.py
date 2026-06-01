@@ -57,7 +57,7 @@ MODEL_PATH = "yolov8m-oiv7.onnx"     # used when USE_YOLO_WORLD=False. Medium is
                                      # MODEL_PATH = "yolov8n-oiv7.pt".
 CONFIDENCE_THRESHOLD = 0.5           # minimum YOLO confidence to keep a box
 MAX_DETECTIONS = 5                   # cap on shoes processed per frame
-MIN_BBOX_AREA_FRAC = 0.004           # ignore detections smaller than this
+MIN_BBOX_AREA_FRAC = 0               # ignore detections smaller than this
                                      # fraction of the frame area (~60x60 px at
                                      # 720p). Tiny/distant shoes make poor
                                      # training crops. 0 = keep all sizes.
