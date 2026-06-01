@@ -86,6 +86,11 @@ BLUR_SAVE_FLOOR = 0                       # if > 0, skip auto-saving a Reuse sho
                                           # Pick a value from the "Blur:" numbers
                                           # in dataset_review.py (~half a typical
                                           # sharp value). 0 = disabled.
+DISK_SPACE_WARN_MB = 500                  # warn (startup print + on-screen
+                                          # banner + log) when free space on the
+                                          # output drive drops below this many MB,
+                                          # so an unattended station doesn't
+                                          # silently fail to save. 0 = disable.
 
 # --- Color detection ------------------------------------------------------
 ENABLE_COLOR_DETECTION = True        # fill detected_color + color_confidence

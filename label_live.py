@@ -28,6 +28,8 @@ Controls:
     Click on a shoe -> classify it as Recycle and save it
     Q or ESC        -> quit
 """
+import os
+import shutil
 import time
 
 import cv2
@@ -59,6 +61,15 @@ TOAST_DURATION_SEC = 1.0      # how long a save/undo confirmation banner shows
 # only read/appended from the mouse callback; the main loop owns saves.
 TRACKER = None
 PENDING_RECYCLE_SAVES = []
+
+
+def _free_mb(path):
+    """Free space (MB) on the filesystem holding `path`. 0.0 on error."""
+    try:
+        target = path if os.path.exists(path) else "."
+        return shutil.disk_usage(target).free / (1024 * 1024)
+    except Exception:                              # noqa: BLE001 - never crash
+        return 0.0
 
 
 def is_shoe(class_name):
@@ -187,6 +198,15 @@ def main():
     toast_until = 0.0
     toast_color = GREEN
 
+    # Disk-space watch (an unattended station can fill up and lose saves).
+    disk_warn_mb = getattr(config, "DISK_SPACE_WARN_MB", 0)
+    free_mb_now = _free_mb(config.OUTPUT_ROOT)
+    print(f"[disk] {free_mb_now:.0f} MB free on the output drive.")
+    if disk_warn_mb and free_mb_now < disk_warn_mb:
+        print(f"[disk] WARNING: low disk space (< {disk_warn_mb} MB).")
+    last_disk_check = time.time()
+    last_disk_warn = 0.0
+
     try:
         while True:
             ok, frame = cap.read()
@@ -256,6 +276,16 @@ def main():
             # the save logic can capture the best crop, but we don't show a
             # ghost box after the shoe leaves the camera view.
             now = time.time()
+
+            # Disk-space watch (throttled): re-check every 5s; log at most every
+            # 30s while low, and show a persistent banner (drawn below).
+            if disk_warn_mb and now - last_disk_check > 5.0:
+                free_mb_now = _free_mb(config.OUTPUT_ROOT)
+                last_disk_check = now
+                if free_mb_now < disk_warn_mb and now - last_disk_warn > 30.0:
+                    print(f"[disk] WARNING: only {free_mb_now:.0f} MB free.")
+                    last_disk_warn = now
+
             draw_cutoff = TRACKER.frame_idx - 5
             for t in active:
                 if t.last_seen < draw_cutoff:
@@ -280,6 +310,10 @@ def main():
                 f"{status}  |  saved Reuse:{saved_counts['Reuse']} "
                 f"Recycle:{saved_counts['Recycle']}  |  "
                 f"click=Recycle  U=undo  Q/ESC=quit")
+
+            if disk_warn_mb and free_mb_now < disk_warn_mb:
+                cv2.putText(display, f"LOW DISK: {free_mb_now:.0f} MB", (10, 48),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, RED, 2)
 
             if toast_msg and now < toast_until:
                 draw_toast(display, toast_msg, color=toast_color)
