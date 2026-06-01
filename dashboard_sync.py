@@ -16,35 +16,13 @@ Usage:
     python dashboard_sync.py --url http://pi.local:8000
 """
 import argparse
-import json
 import os
 import sys
 
 import config
-from dashboard_client import DashboardClient
+from dashboard_client import (DEFAULT_LEDGER, DashboardClient, load_ledger,
+                              save_ledger)
 from dataset_utils import find_folders, load_entries
-
-_DEFAULT_LEDGER = "dashboard_synced.json"
-
-
-def load_ledger(path):
-    """Read the sync ledger, or return a fresh empty one."""
-    try:
-        with open(path) as f:
-            data = json.load(f)
-        data.setdefault("folders", {})
-        data.setdefault("shoes", {})
-        return data
-    except (FileNotFoundError, ValueError):
-        return {"folders": {}, "shoes": {}}
-
-
-def save_ledger(path, ledger):
-    try:
-        with open(path, "w") as f:
-            json.dump(ledger, f, indent=2)
-    except Exception as exc:                       # noqa: BLE001 - non-fatal
-        print(f"[sync] WARNING: could not write ledger {path}: {exc}")
 
 
 def main():
@@ -55,7 +33,7 @@ def main():
     ap.add_argument("--images-dir", default=config.DASHBOARD_IMAGES_DIR,
                     help="the dashboard's images/ folder on this machine")
     ap.add_argument("--operator", default=config.OPERATOR_ID)
-    ap.add_argument("--ledger", default=_DEFAULT_LEDGER)
+    ap.add_argument("--ledger", default=DEFAULT_LEDGER)
     ap.add_argument("--dry-run", action="store_true",
                     help="show what would be pushed; make no changes")
     args = ap.parse_args()

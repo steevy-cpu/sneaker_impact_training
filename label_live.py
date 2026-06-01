@@ -207,6 +207,23 @@ def main():
     last_disk_check = time.time()
     last_disk_warn = 0.0
 
+    # Live push to the dashboard (optional; fail-safe background thread).
+    pusher = None
+    if getattr(config, "DASHBOARD_PUSH_LIVE", False):
+        try:
+            from dashboard_client import DashboardClient, DEFAULT_LEDGER
+            from dashboard_live import DashboardPusher
+            pusher = DashboardPusher(
+                DashboardClient(config.DASHBOARD_URL,
+                                config.DASHBOARD_IMAGES_DIR,
+                                config.OPERATOR_ID),
+                DEFAULT_LEDGER)
+            pusher.start()
+            print("[dashboard] live push enabled.")
+        except Exception as exc:                   # never block capture on setup
+            print(f"[dashboard] live push disabled (setup failed): {exc}")
+            pusher = None
+
     try:
         while True:
             ok, frame = cap.read()
@@ -247,6 +264,8 @@ def main():
                     toast_msg = f"Saved Recycle #{saved_counts['Recycle']}"
                     toast_until = time.time() + TOAST_DURATION_SEC
                     toast_color = RED
+                    if pusher:
+                        pusher.enqueue(jpg)
 
             # --- Expired tracks: auto-save Reuse ------------------------
             for ex in TRACKER.expire():
@@ -265,6 +284,8 @@ def main():
                     toast_msg = f"Saved Reuse #{saved_counts['Reuse']}"
                     toast_until = time.time() + TOAST_DURATION_SEC
                     toast_color = GREEN
+                    if pusher:
+                        pusher.enqueue(jpg)
 
             # --- Draw masks ---------------------------------------------
             # Draw on a single throwaway copy so `frame` stays pristine for the
@@ -341,6 +362,8 @@ def main():
                     print("[undo] nothing to undo")
     finally:
         detector.stop()
+        if pusher:
+            pusher.stop()
         release_camera(cap)
         cv2.destroyAllWindows()
         print("Live detection stopped.")

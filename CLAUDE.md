@@ -52,6 +52,7 @@ Module responsibilities:
 | `log_utils.py` | Tee console output to a timestamped log file. | done |
 | `dashboard_client.py` | Push collected shoes to the Sneaker Impact Dashboard (REST). | done |
 | `dashboard_sync.py` | Back-fill the dashboard from collected folders (idempotent). | done |
+| `dashboard_live.py` | Background live push from label_live to the dashboard. | done |
 | `capture.py` | Original key-driven dataset capture tool (preserved). | existing |
 | `detect_test.py` | Original detector diagnostic (preserved). | existing |
 
@@ -240,8 +241,17 @@ yolo/color confidence + sharpness go into `notes`. `ai_confidence` is left null
 into `ai_prediction` is only so the dashboard's charts, which count that column,
 populate). A local ledger (`dashboard_synced.json`, git-ignored) makes re-runs
 push only new shoes; one dashboard batch is opened per source day-folder. Config
-is in `config.py` (`DASHBOARD_URL`, `DASHBOARD_IMAGES_DIR`, `OPERATOR_ID`). Live
-push from `label_live` is Phase 2 (`DASHBOARD_PUSH_LIVE`).
+is in `config.py` (`DASHBOARD_URL`, `DASHBOARD_IMAGES_DIR`, `OPERATOR_ID`).
+
+**Phase 2 (live push):** set `config.DASHBOARD_PUSH_LIVE = True` and `label_live`
+pushes each shoe to the dashboard the moment it's saved, via a fail-safe
+background thread (`dashboard_live.DashboardPusher`) — the capture loop never
+blocks or crashes on the network. It shares the same ledger as `dashboard_sync`,
+so the two never double-push; if the dashboard is down, the shoe just stays on
+disk and `dashboard_sync.py` back-fills it later. Don't run `dashboard_sync.py`
+while a live-push session is active (both write the ledger). An undone (U) shoe
+deleted before it's pushed is skipped; if already pushed, its dashboard record
+remains (the dashboard has no delete API).
 
 ## Detection model: YOLO-World vs OIV7
 

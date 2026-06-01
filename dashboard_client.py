@@ -137,3 +137,30 @@ class DashboardClient:
         resp = self._post("/api/shoes",
                           self.build_payload(meta, label, img_url, batch_id))
         return resp.get("id") if resp else None
+
+
+# --- Sync ledger (shared by dashboard_sync.py and dashboard_live.py) --------
+# Maps our crop path -> dashboard shoe id (and source folder -> batch id) so
+# neither the backfill tool nor live push ever double-pushes a shoe.
+DEFAULT_LEDGER = "dashboard_synced.json"
+
+
+def load_ledger(path):
+    """Read the sync ledger, or return a fresh empty one."""
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        data.setdefault("folders", {})
+        data.setdefault("shoes", {})
+        return data
+    except (FileNotFoundError, ValueError):
+        return {"folders": {}, "shoes": {}}
+
+
+def save_ledger(path, ledger):
+    """Write the sync ledger (best-effort; never raises)."""
+    try:
+        with open(path, "w") as f:
+            json.dump(ledger, f, indent=2)
+    except Exception as exc:                       # noqa: BLE001 - non-fatal
+        print(f"[dashboard] WARNING: could not write ledger {path}: {exc}")
