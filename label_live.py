@@ -36,9 +36,10 @@ from ultralytics import YOLO, YOLOWorld
 import config
 from camera_utils import open_camera, release_camera
 from detector_utils import DetectorThread
-from save_utils import save_shoe
+from save_utils import save_shoe, delete_saved
 from tracking_utils import ShoeTracker
-from ui_utils import GREEN, RED, draw_detection_mask, draw_fps, draw_status_text
+from ui_utils import (GREEN, RED, YELLOW, draw_detection_mask, draw_fps,
+                      draw_status_text, draw_toast)
 
 WINDOW_TITLE = "Sneaker Impact - Live Detection"
 
@@ -51,6 +52,7 @@ WINDOW_TITLE = "Sneaker Impact - Live Detection"
 SHOE_CLASS_NAMES = {"shoe", "shoes", "footwear"}
 
 FLASH_DURATION_SEC = 0.5      # how long the Recycle mask flashes red after a click
+TOAST_DURATION_SEC = 1.0      # how long a save/undo confirmation banner shows
 
 # Module-level state shared with the mouse callback. cv2.setMouseCallback
 # doesn't pass `self`, so the tracker + pending-save list live here. They're
@@ -173,6 +175,13 @@ def main():
     prev_time = time.time()
     fps = 0.0
 
+    # Save bookkeeping for confirmation + undo.
+    save_history = []                          # stack of {"jpg","track"} for undo
+    saved_counts = {"Reuse": 0, "Recycle": 0}
+    toast_msg = ""
+    toast_until = 0.0
+    toast_color = GREEN
+
     try:
         while True:
             ok, frame = cap.read()
@@ -200,26 +209,37 @@ def main():
                 t = PENDING_RECYCLE_SAVES.pop()
                 if t.saved:
                     continue
-                save_shoe(t.best_frame, t.best_bbox, "Recycle",
-                          t.last_conf,
-                          model_used=active_model,
-                          tracking_id=t.id,
-                          polygon=t.polygon,
-                          sharpness=t.best_sharpness)   # clicked -> always save
+                jpg = save_shoe(t.best_frame, t.best_bbox, "Recycle",
+                                t.last_conf,
+                                model_used=active_model,
+                                tracking_id=t.id,
+                                polygon=t.polygon,
+                                sharpness=t.best_sharpness)  # clicked -> always save
                 t.saved = True
+                if jpg:
+                    save_history.append({"jpg": jpg, "track": t})
+                    saved_counts["Recycle"] += 1
+                    toast_msg = f"Saved Recycle #{saved_counts['Recycle']}"
+                    toast_until = time.time() + TOAST_DURATION_SEC
+                    toast_color = RED
 
             # --- Expired tracks: auto-save Reuse ------------------------
             for ex in TRACKER.expire():
                 if ex.saved or ex.status != "Reuse":
                     continue
-                save_shoe(ex.best_frame, ex.best_bbox, "Reuse",
-                          ex.last_conf,
-                          model_used=active_model,
-                          tracking_id=ex.id,
-                          polygon=ex.polygon,
-                          sharpness=ex.best_sharpness,
-                          apply_blur_gate=True)
+                jpg = save_shoe(ex.best_frame, ex.best_bbox, "Reuse",
+                                ex.last_conf,
+                                model_used=active_model,
+                                tracking_id=ex.id,
+                                polygon=ex.polygon,
+                                sharpness=ex.best_sharpness,
+                                apply_blur_gate=True)
                 ex.saved = True
+                if jpg:
+                    saved_counts["Reuse"] += 1
+                    toast_msg = f"Saved Reuse #{saved_counts['Reuse']}"
+                    toast_until = time.time() + TOAST_DURATION_SEC
+                    toast_color = GREEN
 
             # --- Draw masks ---------------------------------------------
             # Draw on a single throwaway copy so `frame` stays pristine for the
@@ -246,17 +266,40 @@ def main():
                 instant = 1.0 / dt
                 fps = instant if fps == 0.0 else 0.9 * fps + 0.1 * instant
             if config.DISPLAY_FPS:
-                draw_fps(display, fps)
+                draw_fps(display, fps, det_fps=detector.get_fps())
 
             shown = len(active)
             status = f"{shown} shoe(s)" if shown else "no shoes"
-            draw_status_text(display,
-                             f"{status}  |  click=Recycle, Q/ESC=quit")
+            draw_status_text(
+                display,
+                f"{status}  |  saved Reuse:{saved_counts['Reuse']} "
+                f"Recycle:{saved_counts['Recycle']}  |  "
+                f"click=Recycle  U=undo  Q/ESC=quit")
+
+            if toast_msg and now < toast_until:
+                draw_toast(display, toast_msg, color=toast_color)
 
             cv2.imshow(WINDOW_TITLE, display)
             key = cv2.waitKey(1) & 0xFF
             if key in (ord("q"), 27):              # 27 = ESC
                 break
+            elif key == ord("u"):                  # undo the last Recycle save
+                if save_history:
+                    rec = save_history.pop()
+                    if delete_saved(rec["jpg"]):
+                        tr = rec["track"]
+                        tr.status = "Reuse"
+                        tr.saved = False
+                        tr.flash_until = 0.0
+                        saved_counts["Recycle"] = max(
+                            0, saved_counts["Recycle"] - 1)
+                        toast_msg = "Undid last Recycle"
+                        toast_until = time.time() + TOAST_DURATION_SEC
+                        toast_color = YELLOW
+                        print(f"[undo] removed {rec['jpg']}; "
+                              f"track #{tr.id} back to Reuse")
+                else:
+                    print("[undo] nothing to undo")
     finally:
         detector.stop()
         release_camera(cap)

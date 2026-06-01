@@ -108,9 +108,14 @@ def draw_detection_mask(frame, bbox, label, confidence, color=GREEN,
     return frame
 
 
-def draw_fps(frame, fps):
-    """Draw the FPS counter in the top-right corner."""
-    text = f"FPS: {fps:.1f}"
+def draw_fps(frame, fps, det_fps=None):
+    """Draw the FPS counter in the top-right corner.
+
+    `fps` is the display/main-loop rate. If `det_fps` is given (the detector
+    thread's inference rate), it's shown alongside so you can see whether YOLO
+    is keeping up with the camera.
+    """
+    text = f"FPS: {fps:.1f}" if det_fps is None else f"FPS {fps:.1f} | det {det_fps:.1f}"
     (text_w, _), _ = cv2.getTextSize(text, FONT, 0.6, 2)
     x = max(frame.shape[1] - text_w - 10, 10)
     cv2.putText(frame, text, (x, 24), FONT, 0.6, YELLOW, 2)
@@ -120,4 +125,16 @@ def draw_fps(frame, fps):
 def draw_status_text(frame, text):
     """Draw a status line in the top-left corner."""
     cv2.putText(frame, text, (10, 24), FONT, 0.6, WHITE, 2)
+    return frame
+
+
+def draw_toast(frame, text, color=GREEN):
+    """Draw a short-lived confirmation banner near the bottom-left.
+
+    Used to confirm saves / undo so the operator gets feedback without watching
+    the console. Drawn with a black shadow so it stays readable on any shoe.
+    """
+    y = frame.shape[0] - 16
+    cv2.putText(frame, text, (11, y + 1), FONT, 0.7, (0, 0, 0), 3)
+    cv2.putText(frame, text, (10, y), FONT, 0.7, color, 2)
     return frame

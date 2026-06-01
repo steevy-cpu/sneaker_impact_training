@@ -116,6 +116,7 @@ class DetectorThread:
         self._frame_event = threading.Event()   # set when a new frame is posted
         self._det_lock = threading.Lock()
         self._latest_detections = []
+        self._fps = 0.0                          # detector inference rate
         self._running = threading.Event()
         self._thread = None
 
@@ -147,6 +148,10 @@ class DetectorThread:
         with self._det_lock:
             return list(self._latest_detections)
 
+    def get_fps(self):
+        """Return the detector's smoothed inference rate (cycles/sec)."""
+        return self._fps
+
     # --- worker thread ---------------------------------------------------
 
     def _run(self):
@@ -161,6 +166,7 @@ class DetectorThread:
         # poly_cache: list of {'bbox': tuple, 'polygon': ndarray, 'age': int}.
         poly_cache = []
         last_frame_id = -1
+        last_fps_t = time.time()
 
         while self._running.is_set():
             # Block until a new frame is posted instead of busy-polling. The
@@ -192,6 +198,14 @@ class DetectorThread:
 
                 with self._det_lock:
                     self._latest_detections = shoes
+
+                # Detector inference rate (cycles/sec), smoothed.
+                t_now = time.time()
+                dt = t_now - last_fps_t
+                last_fps_t = t_now
+                if dt > 0:
+                    inst = 1.0 / dt
+                    self._fps = inst if self._fps == 0.0 else 0.9 * self._fps + 0.1 * inst
             except Exception as exc:               # noqa: BLE001 - never crash worker
                 print(f"[detector] ERROR: {exc}")
                 time.sleep(0.05)

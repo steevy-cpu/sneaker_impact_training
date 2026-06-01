@@ -27,6 +27,28 @@ import cv2
 import config
 
 
+def delete_saved(jpg_path):
+    """Delete a saved shoe: its .jpg, .json sidecar, and _full.jpg if present.
+
+    Used by label_live's undo (operator misclick). Returns True if the .jpg was
+    removed. Never raises -- a failed delete is logged and skipped. The shoe
+    number it used is simply left as a gap (numbering needn't be contiguous).
+    """
+    if not jpg_path:
+        return False
+    base = jpg_path[:-4] if jpg_path.endswith(".jpg") else jpg_path
+    removed = False
+    for path in (base + ".jpg", base + ".json", base + "_full.jpg"):
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+                if path == base + ".jpg":
+                    removed = True
+        except Exception as exc:                  # noqa: BLE001 - never crash live
+            print(f"[undo] could not delete {path}: {exc}")
+    return removed
+
+
 def folder_for_today(root=None):
     """Return (and create if needed) today's incoming folder.
 
