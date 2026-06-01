@@ -131,3 +131,16 @@ LOG_TO_FILE = True           # mirror label_live's console output to a
                              # timestamped file in LOG_DIR -- useful for an
                              # unattended capture station. False = console only.
 LOG_DIR = "logs"             # where run logs are written (git-ignored)
+
+# --- Dashboard integration ------------------------------------------------
+# Push collected shoes to the Sneaker Impact Dashboard (run it in APP_MODE=actual
+# on the SAME machine, so crops can be copied into its images/ folder). The crop
+# becomes img_top; the operator's Reuse/Recycle label is mirrored into both
+# ai_prediction and final_decision (review_status=COMPLETED). dashboard_sync.py
+# backfills collected folders; dashboard_client.py does the actual POST.
+DASHBOARD_URL = "http://localhost:8000"         # dashboard FastAPI base URL
+DASHBOARD_IMAGES_DIR = "../sneaker-impact-dash/images"  # the dashboard's images/
+                                                # folder on THIS machine; crops are
+                                                # copied here and served at /images/.
+OPERATOR_ID = "OP-LIVE"                         # recorded on every pushed record
+DASHBOARD_PUSH_LIVE = False                     # Phase 2: live push from label_live

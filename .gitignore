@@ -9,6 +9,9 @@ __pycache__/
 # run logs
 logs/
 
+# dashboard sync ledger (local push state)
+dashboard_synced.json
+
 # macOS junk (the T7 drive is exFAT and writes these sidecar files)
 .DS_Store
 ._*

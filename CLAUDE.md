@@ -50,6 +50,8 @@ Module responsibilities:
 | `dataset_utils.py` | Shared folder listing + entry loading for the dataset tools. | done |
 | `image_utils.py` | Shared `sharpness()` (variance of Laplacian). | done |
 | `log_utils.py` | Tee console output to a timestamped log file. | done |
+| `dashboard_client.py` | Push collected shoes to the Sneaker Impact Dashboard (REST). | done |
+| `dashboard_sync.py` | Back-fill the dashboard from collected folders (idempotent). | done |
 | `capture.py` | Original key-driven dataset capture tool (preserved). | existing |
 | `detect_test.py` | Original detector diagnostic (preserved). | existing |
 
@@ -215,6 +217,31 @@ distribution, and per-day counts, and flags class imbalance.
 the handoff artifact for the (out-of-scope) training step. All dataset tools
 share `dataset_utils.{find_folders,load_entries}`, which skips macOS `._`
 sidecar files so they aren't miscounted as shoes.
+
+## Dashboard integration (Phase 1: sync)
+
+The **Sneaker Impact Dashboard** (separate repo: FastAPI + SQLite) visualizes the
+collected data. Run it in `APP_MODE=actual` on the **same machine** as the
+station (so crops can be copied into its `images/` folder).
+
+`dashboard_sync.py` back-fills it from the `incoming*` folders:
+
+```bash
+python dashboard_sync.py --dry-run                 # preview, no changes
+python dashboard_sync.py                           # copy crops + POST records
+python dashboard_sync.py --folder incoming06012026 # one folder
+```
+
+Mapping (in `dashboard_client.py`): the operator's Reuse/Recycle label is
+mirrored into both `ai_prediction` and `final_decision` (`review_status`
+COMPLETED), the crop becomes `img_top`, `detected_color` → `shoe_color`, and
+yolo/color confidence + sharpness go into `notes`. `ai_confidence` is left null
+(there is no Reuse/Recycle *classifier* yet — the label is human; mirroring it
+into `ai_prediction` is only so the dashboard's charts, which count that column,
+populate). A local ledger (`dashboard_synced.json`, git-ignored) makes re-runs
+push only new shoes; one dashboard batch is opened per source day-folder. Config
+is in `config.py` (`DASHBOARD_URL`, `DASHBOARD_IMAGES_DIR`, `OPERATOR_ID`). Live
+push from `label_live` is Phase 2 (`DASHBOARD_PUSH_LIVE`).
 
 ## Detection model: YOLO-World vs OIV7
 
