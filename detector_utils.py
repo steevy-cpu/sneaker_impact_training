@@ -113,6 +113,7 @@ class DetectorThread:
         self._frame_lock = threading.Lock()
         self._latest_frame = None
         self._latest_frame_id = 0
+        self._frame_event = threading.Event()   # set when a new frame is posted
         self._det_lock = threading.Lock()
         self._latest_detections = []
         self._running = threading.Event()
@@ -130,6 +131,7 @@ class DetectorThread:
     def stop(self):
         """Signal the worker to stop and wait briefly for it."""
         self._running.clear()
+        self._frame_event.set()                # wake the worker so it exits now
         if self._thread is not None:
             self._thread.join(timeout=2.0)
 
@@ -138,6 +140,7 @@ class DetectorThread:
         with self._frame_lock:
             self._latest_frame = frame
             self._latest_frame_id += 1
+        self._frame_event.set()                # wake the worker if it's waiting
 
     def get_detections(self):
         """Return a snapshot of the most recent detections."""
@@ -160,11 +163,16 @@ class DetectorThread:
         last_frame_id = -1
 
         while self._running.is_set():
+            # Block until a new frame is posted instead of busy-polling. The
+            # timeout keeps us checking the running flag ~10x/sec so stop() is
+            # responsive. Clear BEFORE reading so a frame posted during the
+            # (slow) inference below still re-wakes us for the next round.
+            self._frame_event.wait(timeout=0.1)
+            self._frame_event.clear()
             with self._frame_lock:
                 frame = self._latest_frame
                 frame_id = self._latest_frame_id
             if frame is None or frame_id == last_frame_id:
-                time.sleep(0.005)
                 continue
             last_frame_id = frame_id
 

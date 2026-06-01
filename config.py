@@ -23,6 +23,12 @@ tracking, saving, and color logic are NOT implemented yet -- later phases.
 # order, so picking by name can silently grab the wrong camera. Use the index.
 CAMERA_NAME = ""           # leave empty; name lookup isn't reliable on macOS
 CAMERA_INDEX = 0           # OpenCV index for the Logitech Webcam C930e here
+CAPTURE_WIDTH = 1280       # request this capture resolution from the camera.
+CAPTURE_HEIGHT = 720       # Smaller = faster per-frame work everywhere (copies,
+                           # YOLO, color, saves) AND smaller saved crops. The
+                           # camera snaps to its nearest supported mode;
+                           # open_camera() prints the resolution it actually got.
+                           # Set BOTH to 0 to keep the camera's native resolution.
 
 # --- Detection ------------------------------------------------------------
 # Two model families are supported:
@@ -30,7 +36,7 @@ CAMERA_INDEX = 0           # OpenCV index for the Logitech Webcam C930e here
 #    classes in YOLO_WORLD_CLASSES. Better at uncommon shoe types (five-toe
 #    shoes, etc.) because it understands text labels, not just a single
 #    "Footwear" bucket. Small variant chosen for Pi 5 / Jetson Nano viability.
-#  - USE_YOLO_WORLD=False: standard YOLO with MODEL_PATH (default OIV7 medium).
+#  - USE_YOLO_WORLD=False: standard YOLO with MODEL_PATH (default OIV7 nano).
 USE_YOLO_WORLD = False
 YOLO_WORLD_MODEL = "yolov8s-worldv2.pt"   # ~28MB, runs on Pi 5 / Jetson Nano
 YOLO_WORLD_CLASSES = [                    # prompts -- tune freely
@@ -38,7 +44,15 @@ YOLO_WORLD_CLASSES = [                    # prompts -- tune freely
     "flip flop", "high heel", "toe shoe", "athletic shoe", "loafer",
 ]
 
-MODEL_PATH = "yolov8m-oiv7.onnx"       # used when USE_YOLO_WORLD=False
+MODEL_PATH = "yolov8n-oiv7.pt"       # used when USE_YOLO_WORLD=False. Nano is
+                                     # ~3x faster on Pi 5 CPU than medium, at a
+                                     # small accuracy cost (the dataset is human-
+                                     # reviewed, so misses are catchable). For
+                                     # max Pi speed, export once and repoint this:
+                                     #   from ultralytics import YOLO
+                                     #   YOLO("yolov8n-oiv7.pt").export(
+                                     #       format="onnx", imgsz=320, simplify=True)
+                                     # then set MODEL_PATH = "yolov8n-oiv7.onnx".
 CONFIDENCE_THRESHOLD = 0.5           # minimum YOLO confidence to keep a box
 MAX_DETECTIONS = 5                   # cap on shoes processed per frame
 YOLO_IMGSZ = 320                     # YOLO input size; default ultralytics
@@ -70,6 +84,11 @@ TRACK_EXPIRATION_FRAMES = 60         # frames a shoe may be missing before save
                                      # this if shoes auto-save as Reuse before
                                      # the operator has time to double-click)
 TRACK_IOU_THRESHOLD = 0.3            # min IoU to match a detection to a track
+SHARPNESS_RECHECK_MIN_MOVE = 8       # px a shoe's bbox center must move before
+                                     # we recompute its sharpness. A still shoe's
+                                     # sharpness barely changes, so this skips
+                                     # redundant Laplacian work each frame.
+                                     # 0 = always recompute (old behavior).
 MASK_SHRINK = 0.7                    # draw mask at this fraction of bbox size,
                                      # centered, so adjacent shoes stay visible
                                      # (click target still uses the full bbox)

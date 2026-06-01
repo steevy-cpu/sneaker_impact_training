@@ -181,14 +181,17 @@ def main():
                 print("[camera] Failed to read frame; stopping.")
                 break
 
-            # Hand the newest frame to the detector; pull its latest results.
-            detector.post_frame(frame.copy())
+            # `frame` is a fresh buffer from cap.read() each tick and we never
+            # draw on it (all drawing goes to `display`, a copy made below), so
+            # the detector thread and the tracker can both read it directly --
+            # no per-frame full-frame copies needed here.
+            detector.post_frame(frame)
             shoes = detector.get_detections()
 
             # --- Tracker update -----------------------------------------
-            # Hand the tracker a CLEAN copy of the frame so the saved crops
-            # don't contain the mask we're about to paint onto the display.
-            active = TRACKER.update(shoes, frame.copy())
+            # The tracker only reads `frame` to score sharpness and keeps a copy
+            # of the small best crop, so sharing the clean frame is safe.
+            active = TRACKER.update(shoes, frame)
 
             # --- Pending Recycle saves (from mouse clicks) --------------
             # Use best_frame/best_bbox (the sharpest snapshot of this shoe)
@@ -217,6 +220,10 @@ def main():
                 ex.saved = True
 
             # --- Draw masks ---------------------------------------------
+            # Draw on a single throwaway copy so `frame` stays pristine for the
+            # detector thread and the tracker's best-crop snapshots.
+            display = frame.copy()
+
             # Only draw boxes for tracks actively seen in recent frames.
             # Tracks linger longer internally (TRACK_EXPIRATION_FRAMES) so
             # the save logic can capture the best crop, but we don't show a
@@ -227,7 +234,7 @@ def main():
                 if t.last_seen < draw_cutoff:
                     continue
                 color = RED if t.status == "Recycle" else GREEN
-                draw_detection_mask(frame, t.bbox, "Shoe", t.last_conf,
+                draw_detection_mask(display, t.bbox, "Shoe", t.last_conf,
                                     color=color, polygon=t.polygon)
 
             # FPS (smoothed so the number doesn't jitter).
@@ -237,14 +244,14 @@ def main():
                 instant = 1.0 / dt
                 fps = instant if fps == 0.0 else 0.9 * fps + 0.1 * instant
             if config.DISPLAY_FPS:
-                draw_fps(frame, fps)
+                draw_fps(display, fps)
 
             shown = len(active)
             status = f"{shown} shoe(s)" if shown else "no shoes"
-            draw_status_text(frame,
+            draw_status_text(display,
                              f"{status}  |  click=Recycle, Q/ESC=quit")
 
-            cv2.imshow(WINDOW_TITLE, frame)
+            cv2.imshow(WINDOW_TITLE, display)
             key = cv2.waitKey(1) & 0xFF
             if key in (ord("q"), 27):              # 27 = ESC
                 break

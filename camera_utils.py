@@ -121,6 +121,14 @@ def open_camera(camera_index=None):
         print("[camera] check the USB-C connection, and confirm camera permissions.")
         return None
 
+    # Request the configured capture resolution before the first read. Smaller
+    # frames mean less work everywhere downstream (copies, YOLO, color, saves)
+    # and smaller saved crops. The camera snaps to its nearest supported mode.
+    if getattr(config, "CAPTURE_WIDTH", 0) > 0:
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAPTURE_WIDTH)
+    if getattr(config, "CAPTURE_HEIGHT", 0) > 0:
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAPTURE_HEIGHT)
+
     # Confirm the camera really delivers frames -- "opened" alone isn't enough.
     ok, _ = cap.read()
     if not ok:
@@ -129,7 +137,9 @@ def open_camera(camera_index=None):
         cap.release()
         return None
 
-    print(f"[camera] OK: using camera {label}.")
+    actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    print(f"[camera] OK: using camera {label} at {actual_w}x{actual_h}.")
     return cap
 
 

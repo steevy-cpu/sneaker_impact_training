@@ -51,13 +51,12 @@ def dhash(image, size=8):
 
 
 def hamming(a, b):
-    """Bit-count of XOR of two integers (hamming distance between hashes)."""
-    x = a ^ b
-    count = 0
-    while x:
-        count += x & 1
-        x >>= 1
-    return count
+    """Hamming distance between two hashes (popcount of XOR).
+
+    int.bit_count() is a C builtin (Python 3.10+) -- far faster than a manual
+    bit-shift loop, which matters as the dataset grows.
+    """
+    return (a ^ b).bit_count()
 
 
 # ── Dataset loading ───────────────────────────────────────────────────────────

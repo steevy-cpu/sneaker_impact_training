@@ -40,26 +40,40 @@ def folder_for_today(root=None):
     return folder
 
 
+# In-process cache of the last shoe number used per (folder, classification).
+# The first save for a folder+class scans the folder (restart-safe); after that
+# we just increment, sparing a directory listing on every single save.
+_NUMBER_CACHE = {}
+
+
 def next_number(folder, classification):
     """Return the next per-class shoe number for `folder`.
 
-    Scans existing `shoe_<classification>_<color>_<N>.jpg` files and returns
-    max(N) + 1, defaulting to 1. Color may be any word, so we match the number
-    as the last underscore-separated token before .jpg.
+    First call for a (folder, classification) scans existing
+    `shoe_<classification>_<color>_<N>.jpg` files for max(N) (restart-safe);
+    later calls just increment a cached counter. Color may be any word, so we
+    match the number as the last underscore-separated token before .jpg.
+
+    Numbering need not be contiguous, so a save that's skipped after calling
+    this (e.g. a degenerate bbox) simply leaves a harmless gap.
     """
-    pattern = re.compile(
-        rf"shoe_{re.escape(classification)}_\w+_(\d+)\.jpg$",
-        re.IGNORECASE,
-    )
-    max_n = 0
-    try:
-        for name in os.listdir(folder):
-            m = pattern.match(name)
-            if m:
-                max_n = max(max_n, int(m.group(1)))
-    except FileNotFoundError:
-        pass
-    return max_n + 1
+    key = (folder, classification)
+    if key not in _NUMBER_CACHE:
+        pattern = re.compile(
+            rf"shoe_{re.escape(classification)}_\w+_(\d+)\.jpg$",
+            re.IGNORECASE,
+        )
+        max_n = 0
+        try:
+            for name in os.listdir(folder):
+                m = pattern.match(name)
+                if m:
+                    max_n = max(max_n, int(m.group(1)))
+        except FileNotFoundError:
+            pass
+        _NUMBER_CACHE[key] = max_n
+    _NUMBER_CACHE[key] += 1
+    return _NUMBER_CACHE[key]
 
 
 def _clip_bbox(bbox, frame_w, frame_h):

@@ -16,6 +16,9 @@ heavyweight tracker. That's plenty for shoes moving through a static scene.
 """
 import cv2
 
+import config
+
+
 def sharpness(image):
     """Variance of the Laplacian -- higher = sharper. Returns 0 on failure.
 
@@ -60,6 +63,9 @@ class ShoeTrack:
         self.best_frame = frame
         self.best_bbox = bbox
         self.best_sharpness = 0.0
+        # Bbox center the last time sharpness was recomputed; lets the tracker
+        # skip redundant Laplacian work while a shoe sits still. See _update_best.
+        self._last_sharp_xy = None
         # GrabCut contour (numpy array of shape (N, 1, 2)) or None. Refreshed
         # by the detector worker thread whenever it produces a new polygon.
         self.polygon = None
@@ -151,7 +157,12 @@ class ShoeTracker:
         return list(self.tracks.values())
 
     def _update_best(self, track, frame, bbox):
-        """Replace track.best_frame if this frame's crop is sharper."""
+        """Replace track.best_frame if this frame's crop is sharper.
+
+        Skips the (non-trivial) sharpness computation when the shoe has barely
+        moved since the last check -- a still shoe's sharpness is essentially
+        constant, so re-measuring it every frame is wasted CPU.
+        """
         h, w = frame.shape[:2]
         x1, y1, x2, y2 = [int(v) for v in bbox]
         x1 = max(0, min(x1, w - 1))
@@ -160,6 +171,20 @@ class ShoeTracker:
         y2 = max(0, min(y2, h))
         if x2 <= x1 or y2 <= y1:
             return
+
+        # Throttle: once we already have a best frame, only recompute sharpness
+        # when the bbox center has moved more than SHARPNESS_RECHECK_MIN_MOVE px.
+        cx = (x1 + x2) * 0.5
+        cy = (y1 + y2) * 0.5
+        min_move = getattr(config, "SHARPNESS_RECHECK_MIN_MOVE", 0)
+        if (min_move > 0 and track.best_sharpness > 0
+                and track._last_sharp_xy is not None):
+            dx = cx - track._last_sharp_xy[0]
+            dy = cy - track._last_sharp_xy[1]
+            if (dx * dx + dy * dy) < (min_move * min_move):
+                return
+        track._last_sharp_xy = (cx, cy)
+
         s = sharpness(frame[y1:y2, x1:x2])
         if s > track.best_sharpness:
             track.best_sharpness = s
