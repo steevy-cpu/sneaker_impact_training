@@ -44,7 +44,12 @@ Module responsibilities:
 | `save_utils.py` | Save crops + metadata JSON into dated folders. | done |
 | `color_utils.py` | Broad dominant-color estimate; must fail safe. | done |
 | `dataset_clean.py` | Batch quality cleaner: blur, confidence, dedup filters. | done |
-| `dataset_review.py` | Interactive visual reviewer: keep / delete / relabel per shoe. | done |
+| `dataset_review.py` | Interactive visual reviewer: keep / delete / relabel per shoe (filterable). | done |
+| `dataset_stats.py` | Read-only dataset summary: counts, class balance, color spread. | done |
+| `dataset_export.py` | Export the labeled set to one CSV/JSON manifest. | done |
+| `dataset_utils.py` | Shared folder listing + entry loading for the dataset tools. | done |
+| `image_utils.py` | Shared `sharpness()` (variance of Laplacian). | done |
+| `log_utils.py` | Tee console output to a timestamped log file. | done |
 | `capture.py` | Original key-driven dataset capture tool (preserved). | existing |
 | `detect_test.py` | Original detector diagnostic (preserved). | existing |
 
@@ -192,10 +197,24 @@ python dataset_clean.py --conf 0.5       # stricter confidence threshold
 python dataset_clean.py --folder incoming05292026   # single folder only
 
 QT_QPA_PLATFORM=xcb python dataset_review.py        # visual review
+python dataset_review.py --only Recycle             # review just one class
+python dataset_review.py --color brown              # review one color
+python dataset_review.py --max-sharp 60             # review only blurry shoes
+
+python dataset_stats.py                  # counts, class balance, color spread
+python dataset_export.py --out manifest.csv         # one-row-per-shoe manifest
+python dataset_export.py --format json --out manifest.json
 ```
 
 `dataset_review.py` controls: `SPACE` = keep, `D` = delete, `R` = flip
-Reuse↔Recycle, `←` = go back, `Q`/`ESC` = quit.
+Reuse↔Recycle, `B` or `←` = go back, `Q`/`ESC` = quit.
+
+`dataset_stats.py` (read-only) prints totals, Reuse/Recycle balance, color
+distribution, and per-day counts, and flags class imbalance.
+`dataset_export.py` packages the whole labeled set into one CSV/JSON manifest —
+the handoff artifact for the (out-of-scope) training step. All dataset tools
+share `dataset_utils.{find_folders,load_entries}`, which skips macOS `._`
+sidecar files so they aren't miscounted as shoes.
 
 ## Detection model: YOLO-World vs OIV7
 

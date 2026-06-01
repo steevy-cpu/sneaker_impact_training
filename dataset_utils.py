@@ -37,7 +37,10 @@ def load_entries(folders):
         except FileNotFoundError:
             continue
         for name in names:
-            if not name.endswith(".jpg"):
+            # Skip non-jpg and macOS AppleDouble sidecars ("._foo.jpg") that the
+            # exFAT T7 drive writes -- they're not real shoes and would otherwise
+            # inflate every dataset tool's counts with empty-metadata entries.
+            if not name.endswith(".jpg") or name.startswith("._"):
                 continue
             jpg = os.path.join(folder, name)
             json_path = jpg[:-4] + ".json"

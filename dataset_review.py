@@ -7,6 +7,9 @@ or flip its label (Reuse <-> Recycle). All changes are applied immediately.
 Usage:
     python dataset_review.py                        # all incoming* folders
     python dataset_review.py --folder incoming05292026
+    python dataset_review.py --only Recycle         # one classification only
+    python dataset_review.py --color brown          # one color only
+    python dataset_review.py --max-sharp 60         # only shoes blurrier than 60
 
 Controls:
     SPACE or → (right arrow)  keep and go to next
@@ -38,6 +41,30 @@ BLACK = (0, 0, 0)
 
 DISPLAY_W = 800     # review window width
 PANEL_H = 160       # height of the info panel below the image
+
+
+def apply_filters(entries, args):
+    """Narrow the entry list by --only / --color / --max-sharp.
+
+    For --max-sharp, prefer the sharpness stored in metadata; fall back to
+    measuring the image only when it wasn't recorded.
+    """
+    out = []
+    for e in entries:
+        m = e["meta"]
+        if args.only and m.get("classification") != args.only:
+            continue
+        if args.color and (m.get("detected_color") or "") != args.color:
+            continue
+        if args.max_sharp is not None:
+            s = m.get("sharpness")
+            if s is None:                          # not recorded -> measure now
+                img = cv2.imread(e["jpg"])
+                s = blur_score(img) if img is not None else 0.0
+            if s >= args.max_sharp:
+                continue
+        out.append(e)
+    return out
 
 
 def render(entry, idx, total):
@@ -145,6 +172,12 @@ def main():
     ap.add_argument("--folder", default=None,
                     help="Single incoming* folder (default: all)")
     ap.add_argument("--root", default=config.OUTPUT_ROOT)
+    ap.add_argument("--only", choices=["Reuse", "Recycle"], default=None,
+                    help="review only this classification")
+    ap.add_argument("--color", default=None,
+                    help="review only shoes whose detected_color matches")
+    ap.add_argument("--max-sharp", type=float, default=None,
+                    help="review only shoes blurrier than this sharpness score")
     args = ap.parse_args()
 
     if args.folder:
@@ -156,6 +189,12 @@ def main():
     if not entries:
         print("No shoes found. Run label_live.py first to collect data.")
         sys.exit(0)
+
+    filtered = apply_filters(entries, args)
+    if not filtered:
+        print(f"No shoes match the filter (of {len(entries)} total).")
+        sys.exit(0)
+    entries = filtered
 
     print(f"Loaded {len(entries)} shoe(s). Starting review.")
     cv2.namedWindow("Dataset Review", cv2.WINDOW_NORMAL)
