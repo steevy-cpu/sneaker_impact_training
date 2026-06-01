@@ -145,10 +145,10 @@ python label_live.py       # opens "Sneaker Impact - Live Detection"
 - **Keyboard:** `Q` or `ESC` to quit.
 - **Model requirement:** `MODEL_PATH` must point to a model that has a shoe
   class. Plain COCO (`yolov8n.pt`) has none and will detect nothing. The default
-  is `yolov8n-oiv7.pt` (Open Images V7 nano, class "Footwear") — chosen for Pi 5
-  speed; switch to `yolov8m-oiv7.pt` for higher accuracy, or export an
-  `.onnx`/`.ncnn` build for max speed (see config.py and the deploy section). A
-  startup warning is printed if the loaded model has no shoe-like class.
+  is `yolov8m-oiv7.onnx` (Open Images V7 medium, class "Footwear") — nano was
+  tried for Pi 5 speed but dropped live detections too often, so medium is the
+  reliable default. A startup warning is printed if the loaded model has no
+  shoe-like class.
 - **Capture resolution:** `config.CAPTURE_WIDTH`/`CAPTURE_HEIGHT` (default
   1280×720) cap what the camera streams — smaller = faster everywhere and
   smaller crops; set both to 0 for the camera's native resolution.

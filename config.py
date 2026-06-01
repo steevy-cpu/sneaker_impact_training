@@ -36,7 +36,7 @@ CAPTURE_HEIGHT = 720       # Smaller = faster per-frame work everywhere (copies,
 #    classes in YOLO_WORLD_CLASSES. Better at uncommon shoe types (five-toe
 #    shoes, etc.) because it understands text labels, not just a single
 #    "Footwear" bucket. Small variant chosen for Pi 5 / Jetson Nano viability.
-#  - USE_YOLO_WORLD=False: standard YOLO with MODEL_PATH (default OIV7 nano).
+#  - USE_YOLO_WORLD=False: standard YOLO with MODEL_PATH (default OIV7 medium).
 USE_YOLO_WORLD = False
 YOLO_WORLD_MODEL = "yolov8s-worldv2.pt"   # ~28MB, runs on Pi 5 / Jetson Nano
 YOLO_WORLD_CLASSES = [                    # prompts -- tune freely
@@ -44,15 +44,15 @@ YOLO_WORLD_CLASSES = [                    # prompts -- tune freely
     "flip flop", "high heel", "toe shoe", "athletic shoe", "loafer",
 ]
 
-MODEL_PATH = "yolov8n-oiv7.pt"       # used when USE_YOLO_WORLD=False. Nano is
-                                     # ~3x faster on Pi 5 CPU than medium, at a
-                                     # small accuracy cost (the dataset is human-
-                                     # reviewed, so misses are catchable). For
-                                     # max Pi speed, export once and repoint this:
-                                     #   from ultralytics import YOLO
-                                     #   YOLO("yolov8n-oiv7.pt").export(
-                                     #       format="onnx", imgsz=320, simplify=True)
-                                     # then set MODEL_PATH = "yolov8n-oiv7.onnx".
+MODEL_PATH = "yolov8m-oiv7.onnx"     # used when USE_YOLO_WORLD=False. Medium is
+                                     # the reliable default: nano (yolov8n-oiv7)
+                                     # was ~3x faster on Pi 5 but dropped live
+                                     # detections too often (shoes flickered out
+                                     # while still in frame), and this project
+                                     # values labeling accuracy over FPS. The
+                                     # .onnx export runs much faster than the .pt
+                                     # on Pi 5 CPU. To retry nano, set
+                                     # MODEL_PATH = "yolov8n-oiv7.pt".
 CONFIDENCE_THRESHOLD = 0.5           # minimum YOLO confidence to keep a box
 MAX_DETECTIONS = 5                   # cap on shoes processed per frame
 MIN_BBOX_AREA_FRAC = 0.004           # ignore detections smaller than this
