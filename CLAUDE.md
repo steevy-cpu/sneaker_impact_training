@@ -27,7 +27,7 @@ The operator only ever interacts with BAD (Recycle) shoes, which keeps labeling 
 
 ```
 LIVE CAMERA FEED -> YOLO DETECTION -> BBOX DISPLAY -> (optional COLOR) ->
-DEFAULT LABEL = REUSE -> DOUBLE-CLICK IF BAD -> AUTO-SAVE IMAGE + METADATA
+DEFAULT LABEL = REUSE -> CLICK IF BAD -> AUTO-SAVE IMAGE + METADATA
 ```
 
 Module responsibilities:

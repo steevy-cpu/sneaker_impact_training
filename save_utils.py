@@ -12,9 +12,10 @@ restart-safe: it scans existing files in today's folder and picks the next
 number, so re-running the app in the same day continues the sequence instead
 of overwriting.
 
-Color fields are kept in the schema as `null` until Phase 5 (color detection)
-lands. Saving must never crash the live app -- all failures are caught,
-logged, and the function returns None.
+Color fields (detected_color, color_confidence) are filled by color_utils when
+config.ENABLE_COLOR_DETECTION is on, else left as defaults. Saving must never
+crash the live app -- all failures are caught, logged, and the function returns
+None.
 """
 import json
 import os

@@ -16,9 +16,8 @@ Per frame in the main loop:
   4. Update the IoU tracker, which keeps stable IDs and remembers the
      SHARPEST frame per shoe (variance of Laplacian) for the save.
   5. Save any Recycle clicks; auto-save any expired Reuse tracks.
-  6. Draw a translucent mask over each tracked shoe -- GrabCut polygon
-     when available, shrunk rectangle as fallback. Green = Reuse default,
-     brief red = just-clicked Recycle.
+  6. Draw a rectangle around each tracked shoe on a throwaway display copy.
+     Green = Reuse default, red = Recycle (stays red once clicked).
 
 Saves land in `sneaker_impact/pictures/incoming<MMDDYYYY>/`.
 

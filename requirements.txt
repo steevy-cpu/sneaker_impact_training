@@ -1,3 +1,6 @@
-ultralytics
-opencv-python
-numpy
+# Pinned to known-working lower bounds (tested with ultralytics 8.4, opencv
+# 4.13, numpy 2.3 on macOS and Raspberry Pi 5). Raise a floor if a newer release
+# is needed; the bounds just keep a fresh install off ancient/breaking versions.
+ultralytics>=8.3.0
+opencv-python>=4.9.0
+numpy>=1.26.0

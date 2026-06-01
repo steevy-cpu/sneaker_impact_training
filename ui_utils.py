@@ -98,7 +98,7 @@ def draw_detection_mask(frame, bbox, label, confidence, color=GREEN,
 
     Green = Reuse (default), Red = Recycle. The label and confidence score
     are printed just above the top-left corner of the box.
-    Click hit-testing uses the same full bbox, so double-clicking anywhere
+    Click hit-testing uses the same full bbox, so clicking anywhere
     inside the rectangle flags the shoe as Recycle.
     """
     x1, y1, x2, y2 = [int(v) for v in bbox]

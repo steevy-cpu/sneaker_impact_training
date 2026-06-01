@@ -82,7 +82,7 @@ def render(entry, idx, total):
                 (10, 92), FONT, 0.5, WHITE, 1)
 
     # Line 4: controls
-    cv2.putText(panel, "SPACE/→: keep   D: delete   R: relabel   ←: back   Q/ESC: quit",
+    cv2.putText(panel, "SPACE: keep   D: delete   R: relabel   B/<-: back   Q/ESC: quit",
                 (10, 128), FONT, 0.45, YELLOW, 1)
 
     return np.vstack([img_disp, panel])
@@ -103,7 +103,7 @@ def relabel_entry(entry):
     new_cls = "Recycle" if old_cls == "Reuse" else "Reuse"
 
     folder = entry["folder"]
-    old_name = entry["name"]   # e.g. shoe_Reuse_3.jpg
+    old_name = entry["name"]   # e.g. shoe_Reuse_black_3.jpg
 
     color = meta.get("detected_color") or "unknown"
 
@@ -179,7 +179,7 @@ def main():
         elif key in (ord(" "), 83):         # SPACE or right arrow -> keep & next
             kept += 1
             idx += 1
-        elif key == 81:                     # left arrow -> go back
+        elif key in (81, ord("b")):         # left arrow (Linux) or B -> go back
             idx = max(0, idx - 1)
         elif key == ord("d"):               # D -> delete
             delete_entry(entry)

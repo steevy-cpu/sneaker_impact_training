@@ -9,8 +9,10 @@ hardcodes a camera index, file path, or threshold. Other modules will
 
 NOTE
 ----
-As of Phase 1 the camera layer is implemented (see camera_utils.py). Detection,
-tracking, saving, and color logic are NOT implemented yet -- later phases.
+Phases 1-6 are implemented: camera, live detection/labeling, tracking, dataset
+storage, color detection, and the dataset quality tools all read their settings
+from here. Keep this file the single source of truth -- no module should
+hardcode a camera index, path, or threshold.
 """
 
 # --- Camera ---------------------------------------------------------------
@@ -107,7 +109,7 @@ COLOR_V_BROWN = 200                  # value below this + reddish hue -> brown
 TRACK_EXPIRATION_FRAMES = 60         # frames a shoe may be missing before save
                                      # (~2-6s depending on detection FPS; raise
                                      # this if shoes auto-save as Reuse before
-                                     # the operator has time to double-click)
+                                     # the operator has time to click)
 TRACK_IOU_THRESHOLD = 0.3            # min IoU to match a detection to a track
 SHARPNESS_RECHECK_MIN_MOVE = 8       # px a shoe's bbox center must move before
                                      # we recompute its sharpness. A still shoe's
