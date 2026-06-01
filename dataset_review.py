@@ -25,6 +25,8 @@ import cv2
 import numpy as np
 
 import config
+from dataset_utils import find_folders, load_entries
+from image_utils import sharpness as blur_score
 
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 GREEN = (0, 255, 0)
@@ -36,54 +38,6 @@ BLACK = (0, 0, 0)
 
 DISPLAY_W = 800     # review window width
 PANEL_H = 160       # height of the info panel below the image
-
-
-def blur_score(image):
-    try:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
-        return float(cv2.Laplacian(gray, cv2.CV_64F).var())
-    except Exception:
-        return 0.0
-
-
-def find_folders(root):
-    try:
-        return sorted(
-            os.path.join(root, d)
-            for d in os.listdir(root)
-            if d.startswith("incoming") and os.path.isdir(os.path.join(root, d))
-        )
-    except FileNotFoundError:
-        return []
-
-
-def load_entries(folders):
-    entries = []
-    for folder in folders:
-        try:
-            names = sorted(os.listdir(folder))
-        except FileNotFoundError:
-            continue
-        for name in names:
-            if not name.endswith(".jpg"):
-                continue
-            jpg = os.path.join(folder, name)
-            json_path = jpg.replace(".jpg", ".json")
-            meta = {}
-            if os.path.exists(json_path):
-                try:
-                    with open(json_path) as f:
-                        meta = json.load(f)
-                except Exception:
-                    pass
-            entries.append({
-                "jpg": jpg,
-                "json": json_path if os.path.exists(json_path) else None,
-                "folder": folder,
-                "name": name,
-                "meta": meta,
-            })
-    return entries
 
 
 def render(entry, idx, total):

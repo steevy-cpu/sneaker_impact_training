@@ -16,7 +16,6 @@ Usage:
     python dataset_clean.py --no-dedup             # skip duplicate check
 """
 import argparse
-import json
 import os
 import sys
 
@@ -24,17 +23,8 @@ import cv2
 import numpy as np
 
 import config
-
-
-# ── Blur ─────────────────────────────────────────────────────────────────────
-
-def blur_score(image):
-    """Variance of the Laplacian. Higher = sharper. Returns 0 on failure."""
-    try:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
-        return float(cv2.Laplacian(gray, cv2.CV_64F).var())
-    except Exception:
-        return 0.0
+from dataset_utils import find_folders, load_entries
+from image_utils import sharpness as blur_score
 
 
 # ── Perceptual hash (difference hash, 8x8) ───────────────────────────────────
@@ -57,48 +47,6 @@ def hamming(a, b):
     bit-shift loop, which matters as the dataset grows.
     """
     return (a ^ b).bit_count()
-
-
-# ── Dataset loading ───────────────────────────────────────────────────────────
-
-def load_entries(folder):
-    """Return a list of dicts, one per shoe, from a single incoming* folder."""
-    entries = []
-    try:
-        names = sorted(os.listdir(folder))
-    except FileNotFoundError:
-        return entries
-    for name in names:
-        if not name.endswith(".jpg"):
-            continue
-        jpg_path = os.path.join(folder, name)
-        json_path = jpg_path.replace(".jpg", ".json")
-        meta = {}
-        if os.path.exists(json_path):
-            try:
-                with open(json_path) as f:
-                    meta = json.load(f)
-            except Exception:
-                pass
-        entries.append({
-            "jpg": jpg_path,
-            "json": json_path if os.path.exists(json_path) else None,
-            "name": name,
-            "meta": meta,
-        })
-    return entries
-
-
-def find_folders(root):
-    """Return all incoming* subfolders under root, sorted."""
-    try:
-        return sorted(
-            os.path.join(root, d)
-            for d in os.listdir(root)
-            if d.startswith("incoming") and os.path.isdir(os.path.join(root, d))
-        )
-    except FileNotFoundError:
-        return []
 
 
 # ── Deletion ──────────────────────────────────────────────────────────────────

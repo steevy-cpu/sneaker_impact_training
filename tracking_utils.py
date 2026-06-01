@@ -14,24 +14,8 @@ blur from a shoe entering/leaving the frame doesn't ruin the saved image.
 Matching is greedy by IoU (Intersection-over-Union) -- no neural net, no
 heavyweight tracker. That's plenty for shoes moving through a static scene.
 """
-import cv2
-
 import config
-
-
-def sharpness(image):
-    """Variance of the Laplacian -- higher = sharper. Returns 0 on failure.
-
-    Cheap blur metric used to pick the best frame to save per track.
-    """
-    try:
-        if image is None or image.size == 0:
-            return 0.0
-        gray = (cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-                if image.ndim == 3 else image)
-        return float(cv2.Laplacian(gray, cv2.CV_64F).var())
-    except Exception:                              # noqa: BLE001
-        return 0.0
+from image_utils import sharpness
 
 
 class ShoeTrack:
