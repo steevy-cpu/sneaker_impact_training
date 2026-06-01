@@ -1,13 +1,20 @@
 venv/
 dataset/
 *.pt
+*.onnx
+*.engine
 __pycache__/
 *.pyc
+
+# run logs
+logs/
 
 # macOS junk (the T7 drive is exFAT and writes these sidecar files)
 .DS_Store
 ._*
 
 # collected dataset images/metadata stay local
-sneaker_impact/pictures/incoming_*/
+# (was "incoming_*/", which didn't match the real "incoming<MMDDYYYY>" folders)
+sneaker_impact/pictures/incoming*/
 models/*.pt
+models/*.onnx

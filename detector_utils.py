@@ -167,6 +167,7 @@ class DetectorThread:
         poly_cache = []
         last_frame_id = -1
         last_fps_t = time.time()
+        err_count = 0
 
         while self._running.is_set():
             # Block until a new frame is posted instead of busy-polling. The
@@ -206,9 +207,20 @@ class DetectorThread:
                 if dt > 0:
                     inst = 1.0 / dt
                     self._fps = inst if self._fps == 0.0 else 0.9 * self._fps + 0.1 * inst
+                err_count = 0
             except Exception as exc:               # noqa: BLE001 - never crash worker
-                print(f"[detector] ERROR: {exc}")
-                time.sleep(0.05)
+                err_count += 1
+                # Throttle a repeating failure (e.g. a broken model) so it can't
+                # flood the console at detector speed; keep retrying in case it's
+                # transient.
+                if err_count <= 3:
+                    print(f"[detector] ERROR: {exc}")
+                elif err_count == 4:
+                    print(f"[detector] ERROR repeating; throttling and logging "
+                          f"every 30th from now: {exc}")
+                elif err_count % 30 == 0:
+                    print(f"[detector] ERROR x{err_count}: {exc}")
+                time.sleep(0.05 if err_count < 4 else 2.0)
 
     def _collect_shoes(self, result, frame, poly_cache, refresh):
         """Pull shoe detections out of a YOLO result and pair each with a

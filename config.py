@@ -120,3 +120,9 @@ MASK_SHRINK = 0.7                    # draw mask at this fraction of bbox size,
                                      # centered, so adjacent shoes stay visible
                                      # (click target still uses the full bbox)
 DISPLAY_FPS = True                   # draw an FPS overlay on the live feed
+
+# --- Logging --------------------------------------------------------------
+LOG_TO_FILE = True           # mirror label_live's console output to a
+                             # timestamped file in LOG_DIR -- useful for an
+                             # unattended capture station. False = console only.
+LOG_DIR = "logs"             # where run logs are written (git-ignored)

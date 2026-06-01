@@ -135,6 +135,11 @@ def on_mouse(event, x, y, flags, param):
 def main():
     global TRACKER
 
+    # --- File logging (optional) -----------------------------------------
+    if getattr(config, "LOG_TO_FILE", False):
+        from log_utils import start_file_logging
+        start_file_logging(getattr(config, "LOG_DIR", "logs"))
+
     # --- Load model -------------------------------------------------------
     model = load_model()
     if model is None:
