@@ -205,7 +205,8 @@ def main():
                           t.last_conf,
                           model_used=active_model,
                           tracking_id=t.id,
-                          polygon=t.polygon)
+                          polygon=t.polygon,
+                          sharpness=t.best_sharpness)   # clicked -> always save
                 t.saved = True
 
             # --- Expired tracks: auto-save Reuse ------------------------
@@ -216,7 +217,9 @@ def main():
                           ex.last_conf,
                           model_used=active_model,
                           tracking_id=ex.id,
-                          polygon=ex.polygon)
+                          polygon=ex.polygon,
+                          sharpness=ex.best_sharpness,
+                          apply_blur_gate=True)
                 ex.saved = True
 
             # --- Draw masks ---------------------------------------------

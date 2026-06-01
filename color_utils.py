@@ -13,8 +13,8 @@ dominant broad color in the image. Pipeline:
        - otherwise, hue ranges -> one of:
          red / orange / yellow / green / blue / purple / pink
   3. If a polygon mask is supplied, only pixels INSIDE the polygon count;
-     this avoids letting background pixels dominate. Without a mask, the
-     whole image is sampled.
+     this avoids letting background pixels dominate. Without a mask, a
+     centered fraction (config.COLOR_CENTER_FRAC) is sampled instead.
   4. Return the name of the most-populated bucket; confidence = fraction
      of valid pixels that fell in that bucket (0.0-1.0).
 
@@ -24,6 +24,8 @@ never crash the app's save path.
 """
 import cv2
 import numpy as np
+
+import config
 
 # Bucket-name -> small integer code. Order matters: index 0 is "unknown"
 # so np.zeros initialization defaults to unknown.
@@ -43,15 +45,13 @@ COLOR_NAMES = [
 ]
 _CODE = {name: i for i, name in enumerate(COLOR_NAMES)}
 
-# Tunable thresholds (HSV in OpenCV's convention).
-_V_BLACK = 50         # value below this -> black, regardless of hue
-_V_WHITE = 180        # value above this AND low saturation -> white
-_S_GRAY = 50          # saturation below this -> gray / white / black axis
-                      # (raised from 30 so warm-tinted neutral backgrounds
-                      #  don't leak into orange)
-_V_BROWN = 200        # value below this AND reddish hue -> brown
-                      # (raised from 140: tan/beige/light leather are brown,
-                      #  not orange; true vivid orange still lands in orange)
+# Tunable thresholds (HSV, OpenCV convention). Canonical values + docs live in
+# config.py so they can be tuned without editing code; the fallbacks here keep
+# color detection working if a key is missing from config.
+_V_BLACK = getattr(config, "COLOR_V_BLACK", 50)
+_V_WHITE = getattr(config, "COLOR_V_WHITE", 180)
+_S_GRAY = getattr(config, "COLOR_S_GRAY", 50)
+_V_BROWN = getattr(config, "COLOR_V_BROWN", 200)
 
 
 def classify_color(image, mask=None):
@@ -59,7 +59,8 @@ def classify_color(image, mask=None):
 
     `image` is a BGR numpy array (OpenCV order).
     `mask` is optional: a polygon contour of shape (N, 1, 2). Only pixels
-    inside the polygon are counted. If None, the whole image is sampled.
+    inside the polygon are counted. If None, a centered fraction of the image
+    (config.COLOR_CENTER_FRAC) is sampled instead.
 
     Confidence is the fraction of counted pixels that fell in the winning
     bucket (so a single-color shoe approaches 1.0; a multi-color shoe is
@@ -81,7 +82,18 @@ def classify_color(image, mask=None):
             cv2.fillPoly(poly_mask, [np.asarray(mask, dtype=np.int32)], 255)
             pixel_mask = poly_mask > 0
         else:
-            pixel_mask = np.ones((h, w), dtype=bool)
+            # No polygon: sample a centered region so background near the bbox
+            # edges doesn't bias the color (config.COLOR_CENTER_FRAC controls it).
+            frac = getattr(config, "COLOR_CENTER_FRAC", 1.0)
+            pixel_mask = np.zeros((h, w), dtype=bool)
+            if frac >= 1.0:
+                pixel_mask[:] = True
+            else:
+                my = int(h * (1.0 - frac) / 2.0)
+                mx = int(w * (1.0 - frac) / 2.0)
+                pixel_mask[my:h - my, mx:w - mx] = True
+                if not pixel_mask.any():       # crop too small -> use all of it
+                    pixel_mask[:] = True
 
         if not pixel_mask.any():
             return "unknown", 0.0
@@ -125,8 +137,17 @@ def classify_color(image, mask=None):
         if total == 0:
             return "unknown", 0.0
 
-        winner = int(named_counts.argmax())
-        return COLOR_NAMES[winner], float(named_counts[winner]) / float(total)
+        # Rank buckets; flag "multi" when the top two are within a small margin
+        # so a genuinely two-tone shoe isn't forced into one color.
+        order = np.argsort(named_counts)[::-1]
+        w1 = int(order[0])
+        c1 = int(named_counts[w1])
+        c2 = int(named_counts[int(order[1])]) if named_counts.size > 1 else 0
+        top1_frac = c1 / float(total)
+        margin = getattr(config, "COLOR_AMBIGUOUS_MARGIN", 0.0)
+        if margin > 0 and c2 > 0 and (top1_frac - c2 / float(total)) < margin:
+            return "multi", float(top1_frac)
+        return COLOR_NAMES[w1], float(top1_frac)
 
     except Exception:                                  # noqa: BLE001 - fail safe
         return "unknown", 0.0

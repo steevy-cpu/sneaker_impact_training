@@ -90,7 +90,7 @@ def _clip_bbox(bbox, frame_w, frame_h):
 
 def save_shoe(frame, bbox, classification, yolo_confidence,
               model_used=None, tracking_id=None, output_root=None,
-              polygon=None):
+              polygon=None, sharpness=None, apply_blur_gate=False):
     """Save one shoe (crop + JSON sidecar) and return the JPG path on success.
 
     On any failure (bad bbox, disk error, etc.) prints the error and returns
@@ -108,6 +108,12 @@ def save_shoe(frame, bbox, classification, yolo_confidence,
                          When color detection is enabled, restricts color
                          sampling to pixels inside the polygon so background
                          doesn't bias the answer.
+        sharpness:       optional variance-of-Laplacian score for this crop
+                         (the tracker already computed it). Stored in metadata
+                         and used by the blur gate.
+        apply_blur_gate: if True and config.BLUR_SAVE_FLOOR > 0, skip the save
+                         when `sharpness` is below the floor. Used for Reuse
+                         auto-saves; Recycle clicks pass False (always save).
     """
     try:
         if frame is None:
@@ -122,6 +128,15 @@ def save_shoe(frame, bbox, classification, yolo_confidence,
         x1, y1, x2, y2 = clipped
 
         crop = frame[y1:y2, x1:x2]
+
+        # Blur gate (Reuse auto-saves only; Recycle clicks bypass it). The
+        # sharpness was already measured by the tracker, so we don't recompute.
+        floor = getattr(config, "BLUR_SAVE_FLOOR", 0)
+        if (apply_blur_gate and floor > 0
+                and sharpness is not None and sharpness < floor):
+            print(f"[save] skipped blurry {classification} "
+                  f"(sharpness {sharpness:.0f} < {floor}).")
+            return None
 
         # Detect color first -- it becomes part of the filename.
         detected_color = "unknown"
@@ -167,6 +182,7 @@ def save_shoe(frame, bbox, classification, yolo_confidence,
             "frame_width": w,
             "frame_height": h,
             "model_used": model_used or getattr(config, "MODEL_PATH", None),
+            "sharpness": round(float(sharpness), 1) if sharpness is not None else None,
         }
         with open(json_path, "w") as f:
             json.dump(metadata, f, indent=2)

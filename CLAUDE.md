@@ -82,7 +82,7 @@ Per-class counter (Reuse and Recycle have separate sequences), restart-safe
 
 Metadata JSON fields: `filename, classification, shoe_number, timestamp,
 detected_color, color_confidence, yolo_confidence, bbox, tracking_id,
-frame_width, frame_height, model_used`.
+frame_width, frame_height, model_used, sharpness`.
 
 ## Engineering rules
 
@@ -170,11 +170,17 @@ cleans a shoe dataset ready for external training.
 Color detection details: `classify_color(image, mask=None)` in
 `color_utils.py` returns `(name, confidence)` for one of 11 broad
 categories: black, white, gray, brown, red, orange, yellow, green, blue,
-purple, pink (or "unknown" on failure). Gated by
-`config.ENABLE_COLOR_DETECTION`. `save_shoe` calls it on every save,
-using the GrabCut polygon when available to ignore background pixels.
-Thresholds (`_V_BLACK`, `_V_WHITE`, `_S_GRAY`, `_V_BROWN`) are tunable
-constants at the top of `color_utils.py`.
+purple, pink (or `"multi"` when the top two colors are within
+`config.COLOR_AMBIGUOUS_MARGIN`, or `"unknown"` on failure). Gated by
+`config.ENABLE_COLOR_DETECTION`. `save_shoe` calls it on every save. With
+GrabCut off there's no polygon, so it samples a centered fraction of the crop
+(`config.COLOR_CENTER_FRAC`) to keep edge background out of the estimate.
+HSV thresholds (`COLOR_V_BLACK`, `COLOR_V_WHITE`, `COLOR_S_GRAY`,
+`COLOR_V_BROWN`) now live in `config.py`.
+
+Other dataset-quality knobs: `config.MIN_BBOX_AREA_FRAC` drops tiny/distant
+detections; `config.BLUR_SAVE_FLOOR` (off by default) can skip auto-saving
+blurry Reuse crops — Recycle clicks are always saved.
 
 ## Dataset quality tools (Phase 6)
 

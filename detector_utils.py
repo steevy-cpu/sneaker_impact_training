@@ -203,6 +203,8 @@ class DetectorThread:
         shoes = []
         boxes = result.boxes
         count = 0 if boxes is None else len(boxes)
+        fh, fw = frame.shape[:2]
+        min_area = getattr(config, "MIN_BBOX_AREA_FRAC", 0.0) * fw * fh
         for i in range(count):
             cls_id = int(boxes.cls[i].item())
             class_name = _resolve_class_name(result.names, cls_id)
@@ -211,6 +213,10 @@ class DetectorThread:
             conf = float(boxes.conf[i].item())
             x1, y1, x2, y2 = boxes.xyxy[i].cpu().numpy().tolist()
             bbox = (x1, y1, x2, y2)
+
+            # Skip tiny/distant shoes -- they make poor training crops.
+            if min_area > 0 and (x2 - x1) * (y2 - y1) < min_area:
+                continue
 
             polygon = None
             if getattr(config, "ENABLE_GRABCUT", True):

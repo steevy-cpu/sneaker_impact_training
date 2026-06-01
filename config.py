@@ -55,6 +55,10 @@ MODEL_PATH = "yolov8n-oiv7.pt"       # used when USE_YOLO_WORLD=False. Nano is
                                      # then set MODEL_PATH = "yolov8n-oiv7.onnx".
 CONFIDENCE_THRESHOLD = 0.5           # minimum YOLO confidence to keep a box
 MAX_DETECTIONS = 5                   # cap on shoes processed per frame
+MIN_BBOX_AREA_FRAC = 0.004           # ignore detections smaller than this
+                                     # fraction of the frame area (~60x60 px at
+                                     # 720p). Tiny/distant shoes make poor
+                                     # training crops. 0 = keep all sizes.
 YOLO_IMGSZ = 320                     # YOLO input size; default ultralytics
                                      # uses 640. 416 is ~1.5x faster with a
                                      # small accuracy hit; 320 even faster.
@@ -73,10 +77,31 @@ GRABCUT_REFRESH_CYCLES = 8           # reuse a cached polygon for up to this
 # --- Output ---------------------------------------------------------------
 OUTPUT_ROOT = "sneaker_impact/pictures"   # where crops + metadata will be saved
 SAVE_FULL_FRAME = False                   # also save the full frame beside crop
+BLUR_SAVE_FLOOR = 0                       # if > 0, skip auto-saving a Reuse shoe
+                                          # whose sharpest crop scores below this
+                                          # (variance-of-Laplacian). Operator
+                                          # Recycle clicks are ALWAYS saved.
+                                          # Pick a value from the "Blur:" numbers
+                                          # in dataset_review.py (~half a typical
+                                          # sharp value). 0 = disabled.
 
 # --- Color detection ------------------------------------------------------
 ENABLE_COLOR_DETECTION = True        # fill detected_color + color_confidence
                                      # on each saved shoe JSON
+COLOR_CENTER_FRAC = 0.6              # with no shoe polygon (GrabCut off), sample
+                                     # only this centered fraction of the crop
+                                     # for color, so background near the bbox
+                                     # edges doesn't bias it. 1.0 = whole crop.
+COLOR_AMBIGUOUS_MARGIN = 0.10        # if the top color leads the runner-up by
+                                     # less than this fraction of pixels, label
+                                     # the shoe "multi" rather than guess one.
+                                     # 0 = always pick a single winner.
+# HSV thresholds (OpenCV convention: H 0-179, S/V 0-255). Tune if neutral or
+# warm-tinted shoes land in the wrong bucket.
+COLOR_V_BLACK = 50                   # value below this -> black
+COLOR_V_WHITE = 180                  # value above this + low saturation -> white
+COLOR_S_GRAY = 50                    # saturation below this -> black/gray/white
+COLOR_V_BROWN = 200                  # value below this + reddish hue -> brown
 
 # --- Tracking & UI --------------------------------------------------------
 TRACK_EXPIRATION_FRAMES = 60         # frames a shoe may be missing before save
