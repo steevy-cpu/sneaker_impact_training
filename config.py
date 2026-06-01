@@ -139,7 +139,7 @@ LOG_DIR = "logs"             # where run logs are written (git-ignored)
 # ai_prediction and final_decision (review_status=COMPLETED). dashboard_sync.py
 # backfills collected folders; dashboard_client.py does the actual POST.
 DASHBOARD_URL = "http://localhost:8000"         # dashboard FastAPI base URL
-DASHBOARD_IMAGES_DIR = "../sneaker-impact-dash/images"  # the dashboard's images/
+DASHBOARD_IMAGES_DIR = "sneaker-impact-dash/images"     # the dashboard's images/
                                                 # folder on THIS machine; crops are
                                                 # copied here and served at /images/.
 OPERATOR_ID = "OP-LIVE"                         # recorded on every pushed record
