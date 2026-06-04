@@ -77,6 +77,8 @@ Module responsibilities:
 | `identify_brands.py` | Fill each pair JSON's `make`/`make_confidence` + export confident pairs. | Phase B done |
 | `label_export.py` | Copy confident (color+make) pairs to `label_data/` as `shoes_<color>_<make>_<N>.jpg`. | Phase B done |
 | `ingest_table.py` | Rename incoming table photos to `table1.jpg`, `table2.jpg`, … in `TABLE_INPUT_DIR`. | Phase B done |
+| `model_search.py` | Backend-swappable model identifier; local Ollama VLM (qwen2.5vl) baseline. | Phase C done |
+| `identify_models.py` | Fill each pair JSON's `model`/`model_confidence`/`model_sources` (+ label_data). | Phase C done |
 | `capture.py` | Original key-driven dataset capture tool (preserved). | existing |
 | `detect_test.py` | Original detector diagnostic (preserved). | existing |
 
@@ -369,9 +371,41 @@ python identify_brands.py --force          # re-label even pairs that have a mak
 - **`bbox`** in a pair's JSON = `[x1, y1, x2, y2]` pixel rectangle of that pair
   within the source photo (top-left origin), i.e. where on the table it was.
 
-- **Next (Phase C):** `model_search.py` — given the crop + the confirmed make,
-  look up the specific MODEL via a sneaker DB/API (Sneaks-API / KicksDB) and
-  fill `model`/`model_confidence`/`model_sources`.
+## Model recognition (2026 pivot, Phase C)
+
+Fill each pair crop's `model` (the specific silhouette, e.g. "Air Jordan 1").
+
+```bash
+python identify_models.py --dry-run        # print model guesses, write nothing
+python identify_models.py                  # write model/_confidence/_sources
+python identify_models.py --folder pairs06042026
+python identify_models.py --force          # re-identify even if model is set
+```
+
+- `model_search.build_model_identifier(config)` → a `ModelIdentifier` whose
+  `identify(image_bgr, brand)` returns `(model, confidence, sources)`. Backend
+  `"ollama"` posts the crop + brand to a **local Ollama vision model**
+  (`MODEL_OLLAMA_MODEL`, default `qwen2.5vl:7b`) at `MODEL_OLLAMA_URL` with
+  `format=json`, and parses `{model, confidence}`. Free, private, on-device.
+  Fail-safe → `("unknown", None, [])`.
+- **Ollama must serve from the T7** — the Mac's internal drive is full, and the
+  Ollama GUI app forces `~/.ollama/models`. Run
+  `OLLAMA_MODELS=/Volumes/T7/ARIA/models/ollama ollama serve` from the shell (or
+  set the model location in the app's Settings). Models live on the T7.
+- `identify_models.py` walks the `pairs*` folders, writes `model` /
+  `model_confidence` / `model_sources` into each pair JSON, and propagates the
+  model into any matching `label_data` sidecar. Idempotent (skips already-done
+  unless `--force`).
+- **Accuracy reality (16 pairs):** 12 named a model, 4 honest `"unknown"`.
+  Verified hits: Air Jordan 1, Adidas Superstar, Nike Dunk Low, Vans Old Skool.
+  Even some brand-`"unknown"` pairs got a model (Air Force 1, Air Max 1). BUT the
+  VLM's self-confidence is **uncalibrated** (a flat 0.95) — `"unknown"` is the
+  only trustworthy signal; real verification is the dashboard human-confirm and
+  the planned **CLIP-index** verifier. `model_sources` is empty for the VLM (it
+  cites nothing); a sneaker-DB / CLIP-index backend will populate it.
+- **Next:** add a CLIP reverse-image-index backend (build a catalog, match crops)
+  for a real similarity confidence + source links → fully-local hybrid; swap a
+  heavy Qwen-VL on the supercomputer for an accuracy jump.
 
 ## Detection model: YOLO-World vs OIV7
 

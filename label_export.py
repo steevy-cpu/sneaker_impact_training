@@ -94,8 +94,10 @@ def export_if_confident(meta, src_jpg, cfg=None):
             "filename": base + ".jpg",
             "make": make,
             "color": color,
+            "model": meta.get("model"),            # filled by Phase C if present
             "make_confidence": mconf,
             "color_confidence": cconf,
+            "model_confidence": meta.get("model_confidence"),
             "source_photo": meta.get("source_photo"),
             "source_pair": meta.get("filename"),
         }

@@ -263,3 +263,20 @@ LABEL_COLOR_MIN_CONF = 0.45             # color confidence required to export
                                         # (0.45 so legit two-tone shoes like a
                                         # white+black-stripe Adidas, ~0.49, still
                                         # qualify)
+
+# --- Model recognition (2026 pivot, Phase C) ------------------------------
+# Identify the specific MODEL (e.g. "Air Jordan 1") from the crop + the brand
+# Phase B found. Pluggable like the others:
+#   "ollama" -- a LOCAL Ollama vision model (free, private, on-device). Sends the
+#               crop + brand and parses {model, confidence}. NOTE: the VLM's
+#               self-reported confidence is NOT calibrated (often a flat 0.95),
+#               so treat "unknown" as the real signal and lean on human-confirm
+#               (and the future CLIP-index verifier) for true confidence.
+MODEL_BACKEND = "ollama"
+MODEL_OLLAMA_MODEL = "qwen2.5vl:7b"     # on the supercomputer: qwen3-vl:32b etc.
+MODEL_OLLAMA_URL = "http://localhost:11434"   # local Ollama server
+MODEL_OLLAMA_TIMEOUT = 180              # seconds per image (first load is slow)
+MODEL_MIN_CONF = 0.0                    # below this confidence -> "unknown". VLM
+                                        # confidence is uncalibrated, so 0 keeps
+                                        # its answer; the real gate is the
+                                        # human-confirm step.
