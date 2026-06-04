@@ -83,8 +83,16 @@ best ones** into a separate folder called `label_data/`. A pair qualifies only
 if **both**:
 
 - its **make** is confident (≥ `0.60`) and not `"unknown"`, **and**
-- its **color** is confident (≥ `0.50`) and a real single color (not `"unknown"`
-  or `"multi"`).
+- its **color** is confident (≥ `0.45`) and not `"unknown"`.
+
+> **How the color is decided (CIELAB).** The color in the name comes from
+> `color_utils.py`. It used to use HSV and could answer `"multi"` for two-tone
+> shoes — which wrongly excluded good pairs. We switched it to **CIELAB**, a
+> color space built so that "distance" between two colors matches how different
+> they *look to the human eye* (better than HSV; far better than raw RGB, which
+> mixes brightness into every channel). Neutral pixels (black/gray/white) are
+> named by lightness; colored pixels by the nearest Lab color. It now always
+> returns the **single most-common color** — there is no `"multi"` anymore.
 
 Qualifying crops are copied with a clear, self-describing name:
 
@@ -97,10 +105,11 @@ shoes_<color>_<make>_<N>.jpg      e.g.  shoes_white_adidas_1.jpg
 label file beside it that traces back to the original photo and pair. This is
 **idempotent too** — re-running won't make duplicates.
 
-> Example from our test: of 16 pairs, **5** made it into `label_data/`
-> (Jordan, Adidas, Converse, Yeezy, Vans). The very-confident **New Balance**
-> pair did **not** — its color was `"multi"`, so it failed the color rule. That's
-> the "confident in *both*" rule doing its job.
+> Example from our test: of 16 pairs, **6** made it into `label_data/` —
+> `shoes_black_jordan_1`, `shoes_white_adidas_1`, `shoes_brown_converse_1`,
+> `shoes_gray_yeezy_1`, `shoes_gray_newBalance_1`, `shoes_black_vans_1`. The
+> other 10 were dropped for a weak brand (`"unknown"`) or low color confidence —
+> exactly the "confident in *both*" rule doing its job.
 
 ### Part 5 — Logical table-photo names
 
@@ -129,7 +138,7 @@ python split_table.py --all                   # process everything in that folde
 
 - `BRAND_CLASSES` — the list of brands it can choose from.
 - `BRAND_MIN_CONF` (0.35) — below this, a guess becomes `"unknown"`.
-- `LABEL_MAKE_MIN_CONF` (0.60) / `LABEL_COLOR_MIN_CONF` (0.50) — how confident a
+- `LABEL_MAKE_MIN_CONF` (0.60) / `LABEL_COLOR_MIN_CONF` (0.45) — how confident a
   pair must be to be copied into `label_data/`.
 - `BRAND_MODEL` (`ViT-B/32`) — the CLIP size; a bigger one is more accurate but
   slower.
