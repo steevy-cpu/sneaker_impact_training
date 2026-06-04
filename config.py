@@ -99,16 +99,19 @@ COLOR_CENTER_FRAC = 0.6              # with no shoe polygon (GrabCut off), sampl
                                      # only this centered fraction of the crop
                                      # for color, so background near the bbox
                                      # edges doesn't bias it. 1.0 = whole crop.
-COLOR_AMBIGUOUS_MARGIN = 0.10        # if the top color leads the runner-up by
-                                     # less than this fraction of pixels, label
-                                     # the shoe "multi" rather than guess one.
-                                     # 0 = always pick a single winner.
-# HSV thresholds (OpenCV convention: H 0-179, S/V 0-255). Tune if neutral or
-# warm-tinted shoes land in the wrong bucket.
-COLOR_V_BLACK = 50                   # value below this -> black
-COLOR_V_WHITE = 180                  # value above this + low saturation -> white
-COLOR_S_GRAY = 50                    # saturation below this -> black/gray/white
-COLOR_V_BROWN = 200                  # value below this + reddish hue -> brown
+# Color naming uses CIELAB ("Lab"), a perceptual color space where distance
+# matches how different two colors LOOK to the human eye (better than HSV, and
+# much better than raw RGB which mixes brightness into every channel). Neutral
+# pixels (black/gray/white) are decided by lightness + chroma; colored pixels by
+# nearest Lab anchor. There is no "multi" -- we always keep the single most
+# common color (the one with the most spread across the shoe).
+COLOR_LAB_CHROMA_MIN = 12            # below this chroma (C* = sqrt(a*^2+b*^2)) a
+                                     # pixel is treated as neutral -> black/gray/
+                                     # white; above it, it has a real hue.
+COLOR_LAB_L_BLACK = 30               # neutral pixel with L* (0-100) below this
+                                     # -> black; above COLOR_LAB_L_WHITE -> white;
+                                     # in between -> gray.
+COLOR_LAB_L_WHITE = 80
 
 # --- Tracking & UI --------------------------------------------------------
 TRACK_EXPIRATION_FRAMES = 60         # frames a shoe may be missing before save
@@ -256,4 +259,7 @@ BRAND_MIN_CONF = 0.35                   # if the top brand scores below this,
 # the (out-of-scope) training step. Export is idempotent (dedups by source).
 LABEL_DATA_DIR = "label_data"
 LABEL_MAKE_MIN_CONF = 0.60              # brand confidence required to export
-LABEL_COLOR_MIN_CONF = 0.50             # color confidence required to export
+LABEL_COLOR_MIN_CONF = 0.45             # color confidence required to export
+                                        # (0.45 so legit two-tone shoes like a
+                                        # white+black-stripe Adidas, ~0.49, still
+                                        # qualify)

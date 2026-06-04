@@ -1,34 +1,31 @@
 """
-color_utils.py -- dominant shoe color estimation.
+color_utils.py -- dominant shoe color estimation (CIELAB).
 
-`classify_color(image, mask=None)` returns `(name, confidence)` for the
-dominant broad color in the image. Pipeline:
+`classify_color(image, mask=None)` returns `(name, confidence)` for the dominant
+broad color in the image. Pipeline:
 
-  1. Convert to HSV (OpenCV: H in [0,180), S/V in [0,256)).
-  2. Vectorized per-pixel bucketing:
-       - low V                              -> "black"
-       - low S + high V                     -> "white"
-       - low S + mid V                      -> "gray"
-       - mid V + reddish hue + medium S     -> "brown"
-       - otherwise, hue ranges -> one of:
-         red / orange / yellow / green / blue / purple / pink
-  3. If a polygon mask is supplied, only pixels INSIDE the polygon count;
-     this avoids letting background pixels dominate. Without a mask, a
-     centered fraction (config.COLOR_CENTER_FRAC) is sampled instead.
-  4. Return the name of the most-populated bucket; confidence = fraction
-     of valid pixels that fell in that bucket (0.0-1.0).
+  1. Convert to CIELAB -- a perceptual color space where Euclidean distance
+     matches how different two colors LOOK to the human eye (better than HSV for
+     naming, and much better than raw RGB, which mixes brightness into every
+     channel).
+  2. Per pixel:
+       - chroma C* = sqrt(a*^2 + b*^2). If C* is low the pixel is NEUTRAL, named
+         by lightness L*: black (dark) / white (light) / gray (in between).
+       - otherwise the pixel has a real hue: name it by the NEAREST colored
+         anchor in Lab (red/orange/yellow/green/blue/purple/pink/brown).
+  3. A polygon mask (or, without one, a centered fraction COLOR_CENTER_FRAC)
+     restricts which pixels count, so background doesn't bias the answer.
+  4. Return the most-common color and its fraction of counted pixels as the
+     confidence. There is NO "multi" -- we always keep the single dominant color.
 
 Failure modes (empty image, broken mask, unexpected exception) return
-("unknown", 0.0) -- this function is wrapped in try/except so it can
-never crash the app's save path.
+("unknown", 0.0) -- wrapped in try/except so it can never crash the save path.
 """
 import cv2
 import numpy as np
 
 import config
 
-# Bucket-name -> small integer code. Order matters: index 0 is "unknown"
-# so np.zeros initialization defaults to unknown.
 COLOR_NAMES = [
     "unknown",   # 0
     "black",     # 1
@@ -45,109 +42,104 @@ COLOR_NAMES = [
 ]
 _CODE = {name: i for i, name in enumerate(COLOR_NAMES)}
 
-# Tunable thresholds (HSV, OpenCV convention). Canonical values + docs live in
-# config.py so they can be tuned without editing code; the fallbacks here keep
-# color detection working if a key is missing from config.
-_V_BLACK = getattr(config, "COLOR_V_BLACK", 50)
-_V_WHITE = getattr(config, "COLOR_V_WHITE", 180)
-_S_GRAY = getattr(config, "COLOR_S_GRAY", 50)
-_V_BROWN = getattr(config, "COLOR_V_BROWN", 200)
+# Colored (chromatic) reference anchors, given as (name, R, G, B). Several
+# anchors may share a name (e.g. navy + blue) to cover a color's natural spread.
+# Neutral colors (black/gray/white) are handled separately by lightness, so they
+# are NOT anchors here.
+_CHROMA_ANCHORS = [
+    ("red",    (200, 30, 30)),
+    ("brown",  (115, 75, 45)),
+    ("brown",  (165, 120, 80)),    # tan / light brown
+    ("orange", (225, 120, 20)),
+    ("yellow", (220, 210, 40)),
+    ("green",  (40, 150, 60)),
+    ("blue",   (40, 80, 190)),
+    ("blue",   (25, 35, 90)),      # navy
+    ("purple", (120, 50, 170)),
+    ("pink",   (235, 130, 175)),
+]
+
+
+def _anchors_lab():
+    """Precompute the chromatic anchors in standard Lab (L*0-100, a*/b* approx
+    -128..127). Returns (codes[K], L[K], a[K], b[K])."""
+    rgb = np.array([c for _, c in _CHROMA_ANCHORS], dtype=np.uint8).reshape(1, -1, 3)
+    lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB).astype(np.float32)[0]
+    codes = np.array([_CODE[name] for name, _ in _CHROMA_ANCHORS], dtype=np.uint8)
+    return codes, lab[:, 0] * (100.0 / 255.0), lab[:, 1] - 128.0, lab[:, 2] - 128.0
+
+
+_A_CODES, _A_L, _A_A, _A_B = _anchors_lab()
+
+
+def _pixel_mask(image, mask):
+    """Boolean (H, W) of which pixels to count: inside the polygon if given,
+    else a centered fraction of the crop (config.COLOR_CENTER_FRAC)."""
+    h, w = image.shape[:2]
+    if mask is not None and len(mask) >= 3:
+        poly = np.zeros((h, w), dtype=np.uint8)
+        cv2.fillPoly(poly, [np.asarray(mask, dtype=np.int32)], 255)
+        return poly > 0
+    frac = getattr(config, "COLOR_CENTER_FRAC", 1.0)
+    pm = np.zeros((h, w), dtype=bool)
+    if frac >= 1.0:
+        pm[:] = True
+    else:
+        my = int(h * (1.0 - frac) / 2.0)
+        mx = int(w * (1.0 - frac) / 2.0)
+        pm[my:h - my, mx:w - mx] = True
+        if not pm.any():
+            pm[:] = True
+    return pm
 
 
 def classify_color(image, mask=None):
-    """Return `(name, confidence)` for the dominant color in `image`.
+    """Return `(name, confidence)` for the dominant color in a BGR `image`.
 
-    `image` is a BGR numpy array (OpenCV order).
-    `mask` is optional: a polygon contour of shape (N, 1, 2). Only pixels
-    inside the polygon are counted. If None, a centered fraction of the image
-    (config.COLOR_CENTER_FRAC) is sampled instead.
-
-    Confidence is the fraction of counted pixels that fell in the winning
-    bucket (so a single-color shoe approaches 1.0; a multi-color shoe is
-    lower, e.g. 0.4). On any failure returns `("unknown", 0.0)`.
+    Confidence is the fraction of counted pixels that share the winning color
+    (a solid shoe approaches 1.0). On any failure returns ("unknown", 0.0).
     """
     try:
         if image is None or image.size == 0:
             return "unknown", 0.0
 
-        h, w = image.shape[:2]
-        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        hue = hsv[..., 0]
-        sat = hsv[..., 1]
-        val = hsv[..., 2]
-
-        # Build pixel-selection mask (True for pixels we count).
-        if mask is not None and len(mask) >= 3:
-            poly_mask = np.zeros((h, w), dtype=np.uint8)
-            cv2.fillPoly(poly_mask, [np.asarray(mask, dtype=np.int32)], 255)
-            pixel_mask = poly_mask > 0
-        else:
-            # No polygon: sample a centered region so background near the bbox
-            # edges doesn't bias the color (config.COLOR_CENTER_FRAC controls it).
-            frac = getattr(config, "COLOR_CENTER_FRAC", 1.0)
-            pixel_mask = np.zeros((h, w), dtype=bool)
-            if frac >= 1.0:
-                pixel_mask[:] = True
-            else:
-                my = int(h * (1.0 - frac) / 2.0)
-                mx = int(w * (1.0 - frac) / 2.0)
-                pixel_mask[my:h - my, mx:w - mx] = True
-                if not pixel_mask.any():       # crop too small -> use all of it
-                    pixel_mask[:] = True
-
-        if not pixel_mask.any():
+        pm = _pixel_mask(image, mask)
+        if not pm.any():
             return "unknown", 0.0
 
-        # Vectorized per-pixel classification, written into `labels`
-        # (small integer codes from COLOR_NAMES).
-        labels = np.zeros((h, w), dtype=np.uint8)  # 0 = unknown by default
+        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
+        L = lab[..., 0] * (100.0 / 255.0)
+        A = lab[..., 1] - 128.0
+        B = lab[..., 2] - 128.0
 
-        is_black = val < _V_BLACK
-        labels[is_black] = _CODE["black"]
+        # Nearest chromatic anchor for every pixel (loop over the few anchors).
+        best_idx = np.zeros(L.shape, dtype=np.int32)
+        best_d = np.full(L.shape, np.inf, dtype=np.float32)
+        for k in range(len(_A_CODES)):
+            d = (L - _A_L[k]) ** 2 + (A - _A_A[k]) ** 2 + (B - _A_B[k]) ** 2
+            closer = d < best_d
+            best_d[closer] = d[closer]
+            best_idx[closer] = k
+        labels = _A_CODES[best_idx]                    # chromatic guess everywhere
 
-        non_black = ~is_black
-        low_sat = non_black & (sat < _S_GRAY)
-        labels[low_sat & (val >= _V_WHITE)] = _CODE["white"]
-        labels[low_sat & (val < _V_WHITE)] = _CODE["gray"]
+        # Override neutral (low-chroma) pixels by lightness.
+        chroma_min = getattr(config, "COLOR_LAB_CHROMA_MIN", 12)
+        l_black = getattr(config, "COLOR_LAB_L_BLACK", 30)
+        l_white = getattr(config, "COLOR_LAB_L_WHITE", 80)
+        chroma = np.sqrt(A * A + B * B)
+        neutral = chroma < chroma_min
+        labels[neutral & (L < l_black)] = _CODE["black"]
+        labels[neutral & (L > l_white)] = _CODE["white"]
+        labels[neutral & (L >= l_black) & (L <= l_white)] = _CODE["gray"]
 
-        sat_pix = non_black & ~low_sat
-
-        # Brown = dark + reddish (red wraps around hue 0 / 180).
-        is_red_hue = (hue <= 25) | (hue >= 170)
-        brown = sat_pix & (val < _V_BROWN) & is_red_hue
-        labels[brown] = _CODE["brown"]
-
-        rem = sat_pix & ~brown
-        labels[rem & is_red_hue & ((hue <= 10) | (hue >= 170))] = _CODE["red"]
-        labels[rem & (hue > 10) & (hue <= 25)] = _CODE["orange"]
-        labels[rem & (hue > 25) & (hue <= 35)] = _CODE["yellow"]
-        labels[rem & (hue > 35) & (hue <= 85)] = _CODE["green"]
-        labels[rem & (hue > 85) & (hue <= 130)] = _CODE["blue"]
-        labels[rem & (hue > 130) & (hue <= 155)] = _CODE["purple"]
-        labels[rem & (hue > 155) & (hue < 170)] = _CODE["pink"]
-
-        # Histogram over only the in-mask pixels.
-        counts = np.bincount(labels[pixel_mask].ravel(),
-                             minlength=len(COLOR_NAMES))
-        # Skip "unknown" (index 0) when picking the winner -- the unknown
-        # bucket is just a fallback for pixels none of the rules matched.
-        named_counts = counts.copy()
-        named_counts[0] = 0
-        total = int(named_counts.sum())
+        # Histogram over counted pixels; pick the most common color.
+        counts = np.bincount(labels[pm].ravel(), minlength=len(COLOR_NAMES))
+        counts[0] = 0                                  # never report "unknown"
+        total = int(counts.sum())
         if total == 0:
             return "unknown", 0.0
-
-        # Rank buckets; flag "multi" when the top two are within a small margin
-        # so a genuinely two-tone shoe isn't forced into one color.
-        order = np.argsort(named_counts)[::-1]
-        w1 = int(order[0])
-        c1 = int(named_counts[w1])
-        c2 = int(named_counts[int(order[1])]) if named_counts.size > 1 else 0
-        top1_frac = c1 / float(total)
-        margin = getattr(config, "COLOR_AMBIGUOUS_MARGIN", 0.0)
-        if margin > 0 and c2 > 0 and (top1_frac - c2 / float(total)) < margin:
-            return "multi", float(top1_frac)
-        return COLOR_NAMES[w1], float(top1_frac)
+        winner = int(np.argmax(counts))
+        return COLOR_NAMES[winner], float(counts[winner]) / float(total)
 
     except Exception:                                  # noqa: BLE001 - fail safe
         return "unknown", 0.0

@@ -202,13 +202,16 @@ cleans a shoe dataset ready for external training.
 Color detection details: `classify_color(image, mask=None)` in
 `color_utils.py` returns `(name, confidence)` for one of 11 broad
 categories: black, white, gray, brown, red, orange, yellow, green, blue,
-purple, pink (or `"multi"` when the top two colors are within
-`config.COLOR_AMBIGUOUS_MARGIN`, or `"unknown"` on failure). Gated by
-`config.ENABLE_COLOR_DETECTION`. `save_shoe` calls it on every save. With
-GrabCut off there's no polygon, so it samples a centered fraction of the crop
-(`config.COLOR_CENTER_FRAC`) to keep edge background out of the estimate.
-HSV thresholds (`COLOR_V_BLACK`, `COLOR_V_WHITE`, `COLOR_S_GRAY`,
-`COLOR_V_BROWN`) now live in `config.py`.
+purple, pink (or `"unknown"` on failure). It uses **CIELAB**, a perceptual
+color space where distance matches how different colors look to the eye
+(better than HSV, far better than raw RGB which mixes brightness into every
+channel). Neutral (low-chroma) pixels are named by lightness — black/gray/white
+— and colored pixels by the nearest Lab anchor. It always returns the **single
+dominant color** (the one with the most pixel spread); there is **no "multi"**.
+Gated by `config.ENABLE_COLOR_DETECTION`. With no polygon it samples a centered
+fraction of the crop (`config.COLOR_CENTER_FRAC`) to keep edge background out of
+the estimate. Lab thresholds (`COLOR_LAB_CHROMA_MIN`, `COLOR_LAB_L_BLACK`,
+`COLOR_LAB_L_WHITE`) live in `config.py`.
 
 Other dataset-quality knobs: `config.MIN_BBOX_AREA_FRAC` drops tiny/distant
 detections; `config.BLUR_SAVE_FLOOR` (off by default) can skip auto-saving
