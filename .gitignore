@@ -30,3 +30,9 @@ table.jpg
 
 # Phase B curated export (high-confidence labeled crops)
 label_data/
+
+# Phase C CLIP catalog (data) + built index -- keep only the README
+sneaker_impact/catalog/*
+!sneaker_impact/catalog/README.md
+sneaker_impact/clip_index.npz
+sneaker_impact/clip_index.json

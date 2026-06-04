@@ -280,3 +280,25 @@ MODEL_MIN_CONF = 0.0                    # below this confidence -> "unknown". VL
                                         # confidence is uncalibrated, so 0 keeps
                                         # its answer; the real gate is the
                                         # human-confirm step.
+
+# CLIP reverse-image index -- the "second opinion" verifier. Matches a crop
+# against a catalog of known sneaker images (built by build_catalog_index.py)
+# and returns the nearest model + a REAL similarity score + a source link.
+# Catalog merges two sources: a public dataset dropped under CLIP_CATALOG_DIR
+# (organized <brand>/<model>/*.jpg) AND our growing label_data. Select it with
+# MODEL_BACKEND="clip-index"; rebuild the index whenever the catalog changes.
+CLIP_CATALOG_DIR = "sneaker_impact/catalog"        # drop a public dataset here
+CLIP_INDEX_PATH = "sneaker_impact/clip_index.npz"  # built index (embeddings)
+CLIP_INDEX_MODEL = "ViT-B/32"          # CLIP variant -- MUST match for build+query
+CLIP_INDEX_MIN_SIM = 0.90              # cosine similarity below this -> "unknown".
+                                       # NOTE: off-the-shelf CLIP rates DIFFERENT
+                                       # sneakers ~0.8, so the threshold must be
+                                       # high (and brand-filtered) to avoid false
+                                       # matches; even so it's coarse for fine-
+                                       # grained models. A bigger catalog (many
+                                       # images per model) + a retrieval-tuned
+                                       # embedder (DINOv2 / fine-tuned) is the
+                                       # real fix.
+CLIP_INDEX_BRAND_FILTER = True         # only compare against catalog entries of
+                                       # the same (Phase B) brand -- faster + more
+                                       # accurate. False = search all brands.

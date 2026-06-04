@@ -77,8 +77,9 @@ Module responsibilities:
 | `identify_brands.py` | Fill each pair JSON's `make`/`make_confidence` + export confident pairs. | Phase B done |
 | `label_export.py` | Copy confident (color+make) pairs to `label_data/` as `shoes_<color>_<make>_<N>.jpg`. | Phase B done |
 | `ingest_table.py` | Rename incoming table photos to `table1.jpg`, `table2.jpg`, … in `TABLE_INPUT_DIR`. | Phase B done |
-| `model_search.py` | Backend-swappable model identifier; local Ollama VLM (qwen2.5vl) baseline. | Phase C done |
+| `model_search.py` | Backend-swappable model identifier; local Ollama VLM (qwen2.5vl) + CLIP-index verifier. | Phase C done |
 | `identify_models.py` | Fill each pair JSON's `model`/`model_confidence`/`model_sources` (+ label_data). | Phase C done |
+| `build_catalog_index.py` | Embed a sneaker catalog (public dataset + label_data) with CLIP → reverse-image index. | Phase C done |
 | `capture.py` | Original key-driven dataset capture tool (preserved). | existing |
 | `detect_test.py` | Original detector diagnostic (preserved). | existing |
 
@@ -403,9 +404,36 @@ python identify_models.py --force          # re-identify even if model is set
   only trustworthy signal; real verification is the dashboard human-confirm and
   the planned **CLIP-index** verifier. `model_sources` is empty for the VLM (it
   cites nothing); a sneaker-DB / CLIP-index backend will populate it.
-- **Next:** add a CLIP reverse-image-index backend (build a catalog, match crops)
-  for a real similarity confidence + source links → fully-local hybrid; swap a
-  heavy Qwen-VL on the supercomputer for an accuracy jump.
+### CLIP reverse-image index (Phase C verifier)
+
+A local "second opinion" that gives a REAL similarity score + a source link
+(unlike the VLM's flat self-confidence).
+
+```bash
+# drop a public dataset under sneaker_impact/catalog/<brand>/<model>/*.jpg
+python build_catalog_index.py            # embed catalog + label_data -> index
+# then use it:  config.MODEL_BACKEND = "clip-index"
+```
+
+- `build_catalog_index.py` merges two sources — `config.CLIP_CATALOG_DIR`
+  (`<brand>/<model>/*.jpg`, a dropped-in public dataset) **and** `label_data/`
+  (our growing model-labeled set) — embeds each image with CLIP
+  (`CLIP_INDEX_MODEL`), and writes `clip_index.npz` (embeddings) + `.json`
+  (metadata). Re-run when the catalog/label_data changes.
+- `model_search` backend `"clip-index"` (`ClipIndexModelIdentifier`) embeds the
+  crop, restricts to the known brand (`CLIP_INDEX_BRAND_FILTER`; returns
+  `"unknown"` if the brand isn't in the catalog — no cross-brand fallback), and
+  returns the nearest model + cosine similarity + that entry's source. Below
+  `CLIP_INDEX_MIN_SIM` → `"unknown"`.
+- **Reality check (verified):** off-the-shelf CLIP rates *different* sneakers at
+  ~0.8 cosine, so the threshold must be high (0.90) and brand-scoped, and it's
+  still coarse for fine-grained models. It works well for near-duplicate / "same
+  listing" matches and as a brand-scoped sanity check. Real gains need (a) a
+  bigger catalog with many images per model, and/or (b) a retrieval-tuned
+  embedder (DINOv2 / a shoe-fine-tuned model) instead of generic CLIP.
+- **Next:** wire a hybrid into `identify_models` (VLM proposes → CLIP-index
+  verifies, recording the similarity as the real confidence + the source); add a
+  public dataset; on the supercomputer use a heavy Qwen-VL + a stronger embedder.
 
 ## Detection model: YOLO-World vs OIV7
 
