@@ -93,7 +93,8 @@ def process_folder(folder, identifier, force=False, dry_run=False):
         brand = meta.get("make", "")
         model, conf, sources = identifier.identify(image, brand)
         conf_str = f"{conf:.2f}" if isinstance(conf, float) else "n/a"
-        print(f"[model] {meta.get('filename')} [{brand}] -> {model} ({conf_str})")
+        src_str = f"  src={sources[0]}" if sources else ""
+        print(f"[model] {meta.get('filename')} [{brand}] -> {model} ({conf_str}){src_str}")
 
         if dry_run:
             done += 1

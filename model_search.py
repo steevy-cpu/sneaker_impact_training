@@ -1,9 +1,13 @@
 """
 model_search.py -- identify the specific MODEL of a shoe (Phase C).
 
-Pluggable like segment_utils/brand_utils. Backend "ollama" asks a LOCAL Ollama
-vision model (e.g. qwen2.5vl) "what model is this <brand> shoe?" and parses
-{model, confidence}. Free, private, on-device.
+Pluggable like segment_utils/brand_utils (config.MODEL_BACKEND):
+  "ollama"     -- ask a LOCAL Ollama vision model (e.g. qwen2.5vl) "what model is
+                  this <brand> shoe?" and parse {model, confidence}. Free, private.
+  "clip-index" -- match the crop against a reverse-image index for a REAL
+                  similarity + a source link (see build_catalog_index.py).
+  "hybrid"     -- the VLM proposes the name and the index verifies it, attaching
+                  the index's real similarity + source when they agree.
 
 The VLM's self-reported confidence is NOT calibrated (often a flat 0.95), so
 treat "unknown" as the real signal; true verification will come from the future
@@ -32,6 +36,11 @@ def _parse_json(text):
         return json.loads(m.group(0))
     except Exception:                                  # noqa: BLE001
         return None
+
+
+def _norm_model(s):
+    """Normalize a model name for comparison (case + spacing/punctuation)."""
+    return " ".join(str(s or "").lower().replace("-", " ").replace("_", " ").split())
 
 
 class ModelIdentifier:
@@ -171,21 +180,75 @@ class IndexModelIdentifier(ModelIdentifier):
 ClipIndexModelIdentifier = IndexModelIdentifier
 
 
+class HybridModelIdentifier(ModelIdentifier):
+    """VLM proposes the model; the reverse-image index verifies it.
+
+    The VLM (Ollama) names the model well but its confidence is uncalibrated
+    (flat ~0.95). The index gives a REAL cosine similarity + a source link. We
+    keep the VLM's name and use the index to attach a trustworthy confidence:
+
+      - index's nearest match AGREES (same model) and sim >= min_sim
+            -> verified: return (vlm_model, sim, [catalog source]).
+      - index is confident (sim >= min_sim) but DISAGREES
+            -> return (vlm_model, None, ["index-disagrees:<model> (sim ..)", ...])
+               so the conflict is visible to the human; VLM stays primary.
+      - index can't verify (no verifier, brand absent, or below min_sim)
+            -> return (vlm_model, None, []): unverified, lean on human-confirm.
+
+    So a NON-NULL confidence here means "index-verified", with a source to prove
+    it -- exactly the trustworthy signal the VLM alone never gave.
+    """
+
+    def __init__(self, proposer, verifier, min_sim):
+        self.proposer = proposer
+        self.verifier = verifier
+        self.min_sim = min_sim
+
+    def identify(self, image_bgr, brand):
+        model, _vlm_conf, _ = self.proposer.identify(image_bgr, brand)
+        if not model or model.lower() == "unknown":
+            return "unknown", None, []                 # nothing to verify
+        if not getattr(self.verifier, "ok", False):
+            return model, None, []                     # no verifier -> unverified
+
+        idx_model, idx_sim, idx_sources = self.verifier.identify(image_bgr, brand)
+        verifiable = (idx_model and idx_model.lower() != "unknown"
+                      and idx_sim is not None and idx_sim >= self.min_sim)
+        if not verifiable:
+            return model, None, []                     # could not verify
+        if _norm_model(idx_model) == _norm_model(model):
+            return model, idx_sim, idx_sources         # VERIFIED: real conf + source
+        note = f"index-disagrees:{idx_model} (sim {idx_sim:.2f})"
+        return model, None, [note] + list(idx_sources)  # conflict flagged for human
+
+
+def _build_ollama(cfg):
+    return OllamaModelIdentifier(
+        getattr(cfg, "MODEL_OLLAMA_MODEL", "qwen2.5vl:7b"),
+        getattr(cfg, "MODEL_OLLAMA_URL", "http://localhost:11434"),
+        getattr(cfg, "MODEL_OLLAMA_TIMEOUT", 180),
+        getattr(cfg, "MODEL_MIN_CONF", 0.0))
+
+
+def _build_index(cfg):
+    return IndexModelIdentifier(
+        cfg,
+        getattr(cfg, "CLIP_INDEX_PATH", "sneaker_impact/clip_index.npz"),
+        getattr(cfg, "CLIP_INDEX_MIN_SIM", 0.75),
+        getattr(cfg, "CLIP_INDEX_BRAND_FILTER", True))
+
+
 def build_model_identifier(cfg=None):
     """Construct the configured model identifier (never raises; failures yield
     ('unknown', None, []) on every identify)."""
     cfg = cfg or config
     backend = getattr(cfg, "MODEL_BACKEND", "ollama").lower()
     if backend == "clip-index":
-        return IndexModelIdentifier(
-            cfg,
-            getattr(cfg, "CLIP_INDEX_PATH", "sneaker_impact/clip_index.npz"),
-            getattr(cfg, "CLIP_INDEX_MIN_SIM", 0.75),
-            getattr(cfg, "CLIP_INDEX_BRAND_FILTER", True))
+        return _build_index(cfg)
+    if backend == "hybrid":                            # VLM proposes, index verifies
+        return HybridModelIdentifier(
+            _build_ollama(cfg), _build_index(cfg),
+            getattr(cfg, "CLIP_INDEX_MIN_SIM", 0.75))
     if backend != "ollama":
         print(f"[model] unknown MODEL_BACKEND '{backend}', using ollama.")
-    return OllamaModelIdentifier(
-        getattr(cfg, "MODEL_OLLAMA_MODEL", "qwen2.5vl:7b"),
-        getattr(cfg, "MODEL_OLLAMA_URL", "http://localhost:11434"),
-        getattr(cfg, "MODEL_OLLAMA_TIMEOUT", 180),
-        getattr(cfg, "MODEL_MIN_CONF", 0.0))
+    return _build_ollama(cfg)

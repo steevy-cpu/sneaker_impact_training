@@ -267,11 +267,16 @@ LABEL_COLOR_MIN_CONF = 0.45             # color confidence required to export
 # --- Model recognition (2026 pivot, Phase C) ------------------------------
 # Identify the specific MODEL (e.g. "Air Jordan 1") from the crop + the brand
 # Phase B found. Pluggable like the others:
-#   "ollama" -- a LOCAL Ollama vision model (free, private, on-device). Sends the
-#               crop + brand and parses {model, confidence}. NOTE: the VLM's
-#               self-reported confidence is NOT calibrated (often a flat 0.95),
-#               so treat "unknown" as the real signal and lean on human-confirm
-#               (and the future CLIP-index verifier) for true confidence.
+#   "ollama"     -- a LOCAL Ollama vision model (free, private, on-device). Sends
+#                   the crop + brand and parses {model, confidence}. NOTE: the
+#                   VLM's self-reported confidence is NOT calibrated (often a flat
+#                   0.95), so treat "unknown" as the real signal.
+#   "clip-index" -- match the crop against the reverse-image index for a REAL
+#                   similarity + source (needs build_catalog_index.py first).
+#   "hybrid"     -- VLM proposes the name, the index verifies it: a non-null
+#                   model_confidence then means "index-verified" (with a source),
+#                   and a disagreement is flagged for the human. RECOMMENDED once
+#                   a good index exists; needs BOTH Ollama running and an index.
 MODEL_BACKEND = "ollama"
 MODEL_OLLAMA_MODEL = "qwen2.5vl:7b"     # on the supercomputer: qwen3-vl:32b etc.
 MODEL_OLLAMA_URL = "http://localhost:11434"   # local Ollama server
