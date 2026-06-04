@@ -287,22 +287,39 @@ MODEL_MIN_CONF = 0.0                    # below this confidence -> "unknown". VL
 # Catalog merges two sources: a public dataset dropped under CLIP_CATALOG_DIR
 # (organized <brand>/<model>/*.jpg) AND our growing label_data. Select it with
 # MODEL_BACKEND="clip-index"; rebuild the index whenever the catalog changes.
+# --- Reverse-image index embedder ----------------------------------------
+# The function that turns an image into a vector for the "clip-index" verifier.
+# Both build_catalog_index.py and the query side (model_search.py) read this ONE
+# setting (via embedder_utils), so the index is always built AND queried with the
+# same embedder. CHANGING THIS REQUIRES REBUILDING THE INDEX (different vector
+# size); the query side detects a stale index and tells you to rebuild.
+#   "clip"   -- OpenAI CLIP ViT-B/32 (512-d). The original baseline. Fast, but
+#               NOT good at fine-grained sneaker retrieval (crosses brands; the
+#               scores don't separate right matches from wrong).
+#   "dinov2" -- Meta DINOv2 (self-supervised, built for instance / fine-grained
+#               retrieval) -- much better at "same model, different photo".
+#               Local + free (downloaded once via torch.hub). Recommended.
+EMBED_BACKEND = "dinov2"
+EMBED_DINOV2_MODEL = "dinov2_vitl14_reg"   # vits14/vitb14/vitl14/vitg14 (+ _reg);
+                                           # bigger = better + more VRAM. The
+                                           # supercomputer can afford _vitl14/g14.
+EMBED_DEVICE = "auto"                  # auto = CUDA -> MPS -> CPU (pick_device)
+
 CLIP_CATALOG_DIR = "sneaker_impact/catalog"        # drop a public dataset here
 CLIP_DATASET_DIRS = [                              # flat <brand>_<model>/*.jpg
     # public datasets (brand inferred from the class-folder name); combine many.
     "downloads/popular_sneakers/sneakers-dataset/sneakers-dataset",
 ]
 CLIP_INDEX_PATH = "sneaker_impact/clip_index.npz"  # built index (embeddings)
-CLIP_INDEX_MODEL = "ViT-B/32"          # CLIP variant -- MUST match for build+query
+CLIP_INDEX_MODEL = "ViT-B/32"          # CLIP variant -- only used when
+                                       # EMBED_BACKEND="clip" (build+query match).
 CLIP_INDEX_MIN_SIM = 0.90              # cosine similarity below this -> "unknown".
-                                       # NOTE: off-the-shelf CLIP rates DIFFERENT
-                                       # sneakers ~0.8, so the threshold must be
-                                       # high (and brand-filtered) to avoid false
-                                       # matches; even so it's coarse for fine-
-                                       # grained models. A bigger catalog (many
-                                       # images per model) + a retrieval-tuned
-                                       # embedder (DINOv2 / fine-tuned) is the
-                                       # real fix.
+                                       # RE-TUNE PER EMBEDDER: this 0.90 was set
+                                       # for CLIP (which rates DIFFERENT sneakers
+                                       # ~0.8). DINOv2's similarity distribution
+                                       # is different, so re-measure on a held-out
+                                       # set (correct vs. wrong matches) and pick
+                                       # a threshold that actually separates them.
 CLIP_INDEX_BRAND_FILTER = True         # only compare against catalog entries of
                                        # the same (Phase B) brand -- faster + more
                                        # accurate. False = search all brands.

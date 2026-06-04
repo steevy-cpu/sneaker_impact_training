@@ -1,9 +1,11 @@
 """
-build_catalog_index.py -- build the CLIP reverse-image index (Phase C verifier).
+build_catalog_index.py -- build the reverse-image index (Phase C verifier).
 
-Embeds a catalog of known sneaker images with CLIP and saves an index the
-"clip-index" model_search backend uses to verify model guesses with a REAL
-similarity score + a source link. The catalog merges two sources:
+Embeds a catalog of known sneaker images and saves an index the "clip-index"
+model_search backend uses to verify model guesses with a REAL similarity score +
+a source link. The embedder is config-driven (config.EMBED_BACKEND: "clip" or
+"dinov2") via embedder_utils, so the index is always built with the SAME
+embedder the query side uses. The catalog merges two sources:
 
   1. config.CLIP_CATALOG_DIR/<brand>/<model>/*.jpg   (drop a public dataset here)
   2. config.LABEL_DATA_DIR  shoes_<color>_<make>_N.jpg + .json  (our growing,
@@ -11,10 +13,11 @@ similarity score + a source link. The catalog merges two sources:
 
 Output (next to CLIP_INDEX_PATH):
   - <stem>.npz   float32 embeddings, shape (N, D), L2-normalized
-  - <stem>.json  parallel metadata list: {brand, model, source, image}
+  - <stem>.json  {embedder: {name, dim}, entries: [{brand, model, source, image}]}
 
-Re-run whenever the catalog or label_data changes. Needs CLIP + torch (already
-pulled in by ultralytics).
+Re-run whenever the catalog/label_data OR the embedder (config.EMBED_BACKEND)
+changes -- different embedders produce different-sized vectors. Needs torch +
+torchvision (DINOv2) or the openai-clip package (CLIP).
 
 Usage:
     python build_catalog_index.py
@@ -30,14 +33,6 @@ import numpy as np
 import config
 
 _IMG_EXTS = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
-
-
-def _device():
-    try:
-        from detector_utils import pick_device
-        return pick_device()
-    except Exception:                                  # noqa: BLE001 - fail safe
-        return "cpu"
 
 
 def collect_catalog_dir(d):
@@ -131,7 +126,6 @@ def main():
     ap.add_argument("--dataset", action="append", default=[],
                     help="flat <brand>_<model>/*.jpg dataset dir (repeatable)")
     ap.add_argument("--out", default=config.CLIP_INDEX_PATH)
-    ap.add_argument("--model", default=config.CLIP_INDEX_MODEL)
     args = ap.parse_args()
 
     dataset_dirs = args.dataset or getattr(config, "CLIP_DATASET_DIRS", [])
@@ -147,16 +141,16 @@ def main():
     by_src = {}
     for e in entries:
         by_src[e["source"].split(":", 1)[0]] = by_src.get(e["source"].split(":", 1)[0], 0) + 1
-    print(f"Catalog: {len(entries)} images ({by_src}). Loading CLIP {args.model}...")
+    print(f"Catalog: {len(entries)} images ({by_src}).")
 
-    import clip
     import cv2
-    import torch
-    from PIL import Image
+    from embedder_utils import build_image_embedder
 
-    device = _device()
-    model, preprocess = clip.load(args.model, device=device)
-    model.eval()
+    embedder = build_image_embedder(config)
+    if not embedder.ok:
+        print("Embedder failed to load; nothing written.")
+        return
+    print(f"Embedding with {embedder.name} ({embedder.dim}-d)...")
 
     embeddings = []
     kept = []
@@ -165,12 +159,11 @@ def main():
         if img is None:
             print(f"  skip unreadable {e['image']}")
             continue
-        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        tensor = preprocess(Image.fromarray(rgb)).unsqueeze(0).to(device)
-        with torch.no_grad():
-            feat = model.encode_image(tensor)
-            feat = feat / feat.norm(dim=-1, keepdim=True)
-        embeddings.append(feat.cpu().numpy()[0].astype("float32"))
+        try:
+            embeddings.append(embedder.embed(img))
+        except Exception as exc:                       # noqa: BLE001 - skip bad
+            print(f"  skip {e['image']}: {exc}")
+            continue
         kept.append(e)
 
     if not embeddings:
@@ -182,7 +175,8 @@ def main():
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     np.savez_compressed(args.out, embeddings=arr)
     with open(stem + ".json", "w") as f:
-        json.dump({"model": args.model, "entries": kept}, f, indent=2)
+        json.dump({"embedder": {"name": embedder.name, "dim": int(arr.shape[1])},
+                   "entries": kept}, f, indent=2)
 
     brands = sorted({e["brand"] for e in kept})
     print(f"\nBuilt index: {len(kept)} images, {arr.shape[1]}-d, brands={brands}")

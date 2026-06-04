@@ -95,49 +95,56 @@ class OllamaModelIdentifier(ModelIdentifier):
             return "unknown", None, []
 
 
-class ClipIndexModelIdentifier(ModelIdentifier):
-    """Identify the model by matching the crop against a CLIP catalog index
-    (built by build_catalog_index.py). Returns the nearest catalog model, the
-    cosine similarity as a REAL confidence, and that entry's source link."""
+class IndexModelIdentifier(ModelIdentifier):
+    """Identify the model by matching the crop against a reverse-image index
+    (built by build_catalog_index.py). The embedder is config-driven
+    (config.EMBED_BACKEND: "clip" or "dinov2") via embedder_utils, and must be
+    the SAME one the index was built with -- this checks the index's stored
+    identity + vector size and disables itself (with a "rebuild" hint) on a
+    mismatch. Returns the nearest catalog model, the cosine similarity as a REAL
+    confidence, and that entry's source link."""
 
-    def __init__(self, index_path, model_name, device, min_sim, brand_filter):
+    def __init__(self, cfg, index_path, min_sim, brand_filter):
         self.min_sim = min_sim
         self.brand_filter = brand_filter
         self.ok = False
         try:
-            import clip
             import numpy as np
-            import torch
+            from embedder_utils import build_image_embedder
             self.np = np
-            self.torch = torch
             stem = index_path[:-4] if index_path.endswith(".npz") else index_path
             self.emb = np.load(index_path)["embeddings"].astype("float32")
             with open(stem + ".json") as f:
                 meta = json.load(f)
             self.entries = meta["entries"]
-            self.device = device
-            self.model, self.preprocess = clip.load(model_name, device=device)
-            self.model.eval()
+            self.embedder = build_image_embedder(cfg)
+            if not self.embedder.ok:
+                print("[model] embedder failed to load; clip-index disabled.")
+                return
+            # The index is only valid for the embedder that built it. Refuse a
+            # stale index (e.g. a CLIP index after switching to DINOv2) instead
+            # of producing garbage cosine scores.
+            built = (meta.get("embedder") or {}).get("name")
+            if built and built != self.embedder.name:
+                print(f"[model] index built with '{built}' but config uses "
+                      f"'{self.embedder.name}'. Rebuild: build_catalog_index.py")
+                return
+            if self.emb.shape[1] != self.embedder.dim:
+                print(f"[model] index is {self.emb.shape[1]}-d but embedder is "
+                      f"{self.embedder.dim}-d. Rebuild: build_catalog_index.py")
+                return
             self.ok = len(self.entries) > 0 and len(self.entries) == self.emb.shape[0]
-            print(f"[model] CLIP-index ready: {len(self.entries)} catalog images "
-                  f"on {device}")
+            print(f"[model] index ready: {len(self.entries)} catalog images, "
+                  f"{self.embedder.name}")
         except Exception as exc:                       # noqa: BLE001 - fail safe
-            print(f"[model] ERROR loading CLIP index '{index_path}': {exc} "
+            print(f"[model] ERROR loading index '{index_path}': {exc} "
                   f"(run build_catalog_index.py)")
 
     def identify(self, image_bgr, brand):
         if not self.ok:
             return "unknown", None, []
         try:
-            import cv2
-            from PIL import Image
-            rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-            tensor = self.preprocess(Image.fromarray(rgb)).unsqueeze(0).to(self.device)
-            with self.torch.no_grad():
-                feat = self.model.encode_image(tensor)
-                feat = feat / feat.norm(dim=-1, keepdim=True)
-            q = feat.cpu().numpy()[0].astype("float32")
-
+            q = self.embedder.embed(image_bgr)
             sims = self.emb @ q                        # cosine (both normalized)
 
             # Restrict to catalog entries of the known brand. If the brand isn't
@@ -156,8 +163,12 @@ class ClipIndexModelIdentifier(ModelIdentifier):
             e = self.entries[best_i]
             return e["model"], best_sim, [e["source"]]
         except Exception as exc:                       # noqa: BLE001 - fail safe
-            print(f"[model] clip-index identify failed: {exc}")
+            print(f"[model] index identify failed: {exc}")
             return "unknown", None, []
+
+
+# Back-compat alias: this backend is no longer CLIP-only (see config.EMBED_BACKEND).
+ClipIndexModelIdentifier = IndexModelIdentifier
 
 
 def build_model_identifier(cfg=None):
@@ -166,10 +177,9 @@ def build_model_identifier(cfg=None):
     cfg = cfg or config
     backend = getattr(cfg, "MODEL_BACKEND", "ollama").lower()
     if backend == "clip-index":
-        return ClipIndexModelIdentifier(
+        return IndexModelIdentifier(
+            cfg,
             getattr(cfg, "CLIP_INDEX_PATH", "sneaker_impact/clip_index.npz"),
-            getattr(cfg, "CLIP_INDEX_MODEL", "ViT-B/32"),
-            _clip_device(cfg),
             getattr(cfg, "CLIP_INDEX_MIN_SIM", 0.75),
             getattr(cfg, "CLIP_INDEX_BRAND_FILTER", True))
     if backend != "ollama":
@@ -179,14 +189,3 @@ def build_model_identifier(cfg=None):
         getattr(cfg, "MODEL_OLLAMA_URL", "http://localhost:11434"),
         getattr(cfg, "MODEL_OLLAMA_TIMEOUT", 180),
         getattr(cfg, "MODEL_MIN_CONF", 0.0))
-
-
-def _clip_device(cfg):
-    pref = getattr(cfg, "BRAND_DEVICE", "auto")        # reuse the same probe
-    if pref and pref != "auto":
-        return pref
-    try:
-        from detector_utils import pick_device
-        return pick_device()
-    except Exception:                                  # noqa: BLE001 - fail safe
-        return "cpu"
