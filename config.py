@@ -144,3 +144,75 @@ DASHBOARD_IMAGES_DIR = "sneaker-impact-dash/images"     # the dashboard's images
                                                 # copied here and served at /images/.
 OPERATOR_ID = "OP-LIVE"                         # recorded on every pushed record
 DASHBOARD_PUSH_LIVE = False                     # Phase 2: live push from label_live
+
+# --- Table segmentation (2026 pivot, Phase A) -----------------------------
+# New direction: photograph the WHOLE TABLE of shoes, then in the background
+# segment it into individual pairs, crop each pair, and (later phases) identify
+# make + model. The segmenter backend is swappable so the licensing call can be
+# made later WITHOUT touching callers:
+#   "yoloe" -- YOLOE-26 open-vocabulary segmentation. Prompt it with text
+#              (SEGMENT_PROMPTS) and it segments those, no training needed.
+#              AGPL-3.0 -- fine while internal; needs Enterprise license OR a
+#              switch to sam2 if this ever ships as a product.
+#   "sam2"  -- Segment Anything 2 (Apache-2.0, commercial-safe). Class-agnostic:
+#              returns every object mask; callers filter. Future / product path.
+# NOTE: plain yolo26-seg is COCO-only (no shoe class), so open-vocab (yoloe) or
+# a custom-trained seg model is required to find shoes with zero training.
+SEGMENT_BACKEND = "yoloe"               # "yoloe" (AGPL) or "sam2" (Apache)
+SEGMENT_MODEL = "yoloe-26s-seg.pt"      # weights for the chosen backend. If the
+                                        # YOLOE-26 weights aren't published yet
+                                        # under this name, "yoloe-11s-seg.pt"
+                                        # works the same way (older YOLOE).
+SEGMENT_PROMPTS = ["shoe", "sneaker"]   # yoloe text prompts. We detect single
+                                        # shoes (cleanest/most complete -- one
+                                        # box per shoe) and then pair them
+                                        # geometrically (SEGMENT_PAIR below) into
+                                        # one record per tied pair. Prompting for
+                                        # "pair of shoes" gave messy overlapping
+                                        # boxes, so we don't.
+SEGMENT_CONF = 0.25                     # min confidence to keep a segment
+SEGMENT_IMGSZ = 1280                    # inference resolution. A whole table of
+                                        # many small shoes is the hard case: the
+                                        # default 640 downsamples them away. Push
+                                        # this toward the photo's real size
+                                        # (e.g. 1280/1536) so distant pairs
+                                        # survive. Higher = slower but far better
+                                        # recall on dense tables. Must be /32.
+SEGMENT_DEVICE = "auto"                 # "auto" (reuses YOLO device pick) or
+                                        # "cpu"/"mps"/"cuda:0"
+# Tiling (SAHI-style): a single wide pass misses most shoes on a crowded table
+# because each one is tiny. Tiling slices the photo into overlapping windows,
+# detects in each (each upscaled to SEGMENT_IMGSZ, so shoes look big), then
+# merges. This is the main recall lever for dense tables.
+SEGMENT_TILE = 512                      # px; 0 = whole image (no tiling). When
+                                        # >0, slice into TILE x TILE windows.
+                                        # Smaller TILE = bigger shoes to the
+                                        # model = better recall, but more tiles
+                                        # = slower.
+SEGMENT_TILE_OVERLAP = 0.25             # fraction adjacent tiles overlap, so a
+                                        # shoe on a seam is still whole in a
+                                        # neighbor tile. 0.2-0.3 is typical.
+SEGMENT_TILE_IOU = 0.4                  # merge two detections from different
+                                        # tiles when they overlap by >= this IoU
+                                        # (the higher-confidence one is kept).
+SEGMENT_CROP_PAD = 0.04                 # pad each crop by this fraction of bbox
+                                        # size on every side (a little context
+                                        # helps the make/model step). 0 = tight.
+SEGMENT_APPLY_MASK = False              # if True, white-out everything outside
+                                        # the segment polygon in the saved crop
+                                        # (cleaner brand crops); needs masks.
+SEGMENT_MIN_AREA_FRAC = 0.0             # drop segments smaller than this frac of
+                                        # the photo area (noise). 0 = keep all.
+SEGMENT_PAIR = True                     # shoes arrive tied in pairs -> group the
+                                        # detected single shoes into pairs, one
+                                        # record per pair (the union crop). False
+                                        # = keep one record per individual shoe.
+SEGMENT_PAIR_MAX_GAP = 1.2              # pair two shoes when the gap between
+                                        # their centers is within this multiple
+                                        # of their average size. Lower = stricter
+                                        # (won't bridge the gap between pairs);
+                                        # higher = more eager to pair.
+
+# Where whole-table photos are read from and where per-pair crops are written.
+TABLE_INPUT_DIR = "sneaker_impact/table_photos"   # full-table photos land here
+TABLE_OUTPUT_ROOT = "sneaker_impact/pairs"        # per-pair crops + JSON go here

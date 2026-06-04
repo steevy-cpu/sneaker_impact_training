@@ -1,6 +1,7 @@
 venv/
 dataset/
 *.pt
+*.ts
 *.onnx
 *.engine
 __pycache__/
@@ -21,3 +22,8 @@ dashboard_synced.json
 sneaker_impact/pictures/incoming*/
 models/*.pt
 models/*.onnx
+
+# table-segmentation pipeline: per-pair crops, input photos, sample photo
+sneaker_impact/pairs/
+sneaker_impact/table_photos/
+table.jpg

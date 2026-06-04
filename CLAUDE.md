@@ -9,6 +9,23 @@ platform** for future AI training. It started as a YOLO/OpenCV shoe-detection
 experiment (`capture.py`, `detect_test.py`) and is being restructured into a
 modular system.
 
+> **2026 pivot (in progress).** The CEO redirected the project: instead of the
+> live click-to-Recycle flow, photograph the **whole table** of shoes, then in
+> the **background** segment it into individual **pairs** (shoes are tied in
+> pairs → one record per pair), and identify each pair's **make + model** (no
+> Reuse/Recycle for now). Plan: segment with **YOLOE-26** (open-vocab, text
+> prompt "pair of shoes", no training) → brand classifier → sneaker-DB/API
+> lookup for the model. The old live-labeling stack (`label_live.py`, IoU
+> tracking, Reuse/Recycle) is **preserved but off the main path**. License note:
+> YOLO26/YOLOE-26 is **AGPL-3.0** — used while internal-only; switch to **SAM 2
+> (Apache-2.0)** or buy the Enterprise license before shipping a product. The
+> segmenter is built backend-swappable for exactly that reason. See the
+> "Table-segmentation pipeline" section below. **Phase A works end-to-end** on a
+> real photo (Mac, MPS, `yoloe-26s-seg.pt`): a single wide pass missed ~95% of a
+> crowded table, so the pipeline **tiles** the photo (recall fix) then **pairs**
+> the detected single shoes geometrically — a realistic 16-pair batch yields 16
+> clean per-pair crops. Realistic batch size is ~16-20 pairs, not 70+.
+
 The near-term priority is **clean, organized dataset collection** — not the
 final automated sorting AI. Human labeling accuracy matters more than automation.
 
@@ -53,6 +70,9 @@ Module responsibilities:
 | `dashboard_client.py` | Push collected shoes to the Sneaker Impact Dashboard (REST). | done |
 | `dashboard_sync.py` | Back-fill the dashboard from collected folders (idempotent). | done |
 | `dashboard_live.py` | Background live push from label_live to the dashboard. | done |
+| `segment_utils.py` | Backend-swappable table segmenter (YOLOE-26 / SAM 2) + tiling for dense recall → per-shoe `Segment`s. | Phase A done |
+| `pair_utils.py` | Group detected single shoes into tied pairs (one record per pair). | Phase A done |
+| `split_table.py` | Whole-table photo → segment → pair → per-pair crops + metadata JSON (make/model placeholders). | Phase A done |
 | `capture.py` | Original key-driven dataset capture tool (preserved). | existing |
 | `detect_test.py` | Original detector diagnostic (preserved). | existing |
 
@@ -252,6 +272,54 @@ disk and `dashboard_sync.py` back-fills it later. Don't run `dashboard_sync.py`
 while a live-push session is active (both write the ledger). An undone (U) shoe
 deleted before it's pushed is skipped; if already pushed, its dashboard record
 remains (the dashboard has no delete API).
+
+## Table-segmentation pipeline (2026 pivot, Phase A)
+
+The new flow: a whole-table photo → segment into pairs → (later) make + model.
+
+```bash
+python split_table.py path/to/table.jpg          # segment one photo into pairs
+python split_table.py path/to/table.jpg --viz     # also dump an overlay JPG
+python split_table.py --all                       # all photos in TABLE_INPUT_DIR
+python split_table.py table.jpg --backend sam2     # override SEGMENT_BACKEND
+```
+
+- `segment_utils.build_segmenter(config)` returns a `Segmenter` whose
+  `segment(image)` yields a list of `Segment(bbox, score, label, polygon)`.
+  Backends: `"yoloe"` (YOLOE-26 open-vocab, text-prompted via
+  `config.SEGMENT_PROMPTS`, AGPL-3.0) and `"sam2"` (Segment Anything 2,
+  Apache-2.0, class-agnostic). Fail-safe: a load/inference error logs and
+  returns `[]`. **Plain `yolo26-seg` is COCO-only (no shoe class)** — use the
+  open-vocab `yoloe` backend (or a custom-trained seg model) to find shoes with
+  zero training. `yoloe-26s-seg.pt` auto-downloads (30MB) and pulls a 242MB
+  MobileCLIP text encoder on first use.
+- **Tiling** (`SEGMENT_TILE`/`_OVERLAP`/`_IOU`): a single wide pass downsamples
+  small distant shoes away (caught 6 of ~80). Tiling slices the photo into
+  overlapping windows, each upscaled to `SEGMENT_IMGSZ`, detects per tile, and
+  merges with IoU + containment NMS (`TiledSegmenter`). On a 16-pair table this
+  took recall from 6 → 32 clean single-shoe boxes.
+- **Pairing** (`pair_utils.pair_shoes`, gated by `SEGMENT_PAIR`): detection is
+  done at the *single-shoe* level (cleanest — prompting "pair of shoes" gave
+  messy overlapping boxes), then the two nearest shoes within
+  `SEGMENT_PAIR_MAX_GAP`×size are merged into one pair record (union crop).
+  32 shoes → 16 pairs. Leftover odd shoes stay as single records; the
+  dashboard's human-confirm is the safety net for mis-pairs.
+- `split_table.py` crops each pair (pad `SEGMENT_CROP_PAD`, optional polygon
+  white-out via `SEGMENT_APPLY_MASK`), runs `color_utils` on the crop, and saves
+  `pair_<N>.jpg` + `.json` into `TABLE_OUTPUT_ROOT/pairs<MMDDYYYY>/`. The JSON
+  carries `make/model/...` as **null placeholders** for the later identify step,
+  so the schema is stable from day one.
+- Config block lives under "Table segmentation" in `config.py`
+  (`SEGMENT_BACKEND/MODEL/PROMPTS/CONF/DEVICE/CROP_PAD/APPLY_MASK/MIN_AREA_FRAC`,
+  `TABLE_INPUT_DIR`, `TABLE_OUTPUT_ROOT`).
+- **exFAT gotcha (this T7 drive):** macOS scatters `._*` AppleDouble files in
+  any folder on the exFAT T7, and matplotlib (pulled in by ultralytics) crashes
+  parsing them (`utf-8 ... 0xb0`). If the venv lives on the T7, run
+  `find venv -name '._*' -delete` after installs (or keep the venv on APFS).
+  Same root cause as the earlier git-clone and dataset-count issues.
+- **Next phases:** B = brand recognition (`brand_utils.py`), C = model lookup
+  via a sneaker DB/API (`model_search.py`), then storage/dashboard remap and the
+  Airtable intake link.
 
 ## Detection model: YOLO-World vs OIV7
 
