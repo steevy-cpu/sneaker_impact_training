@@ -425,12 +425,20 @@ python build_catalog_index.py            # embed catalog + label_data -> index
   `"unknown"` if the brand isn't in the catalog — no cross-brand fallback), and
   returns the nearest model + cosine similarity + that entry's source. Below
   `CLIP_INDEX_MIN_SIM` → `"unknown"`.
-- **Reality check (verified):** off-the-shelf CLIP rates *different* sneakers at
-  ~0.8 cosine, so the threshold must be high (0.90) and brand-scoped, and it's
-  still coarse for fine-grained models. It works well for near-duplicate / "same
-  listing" matches and as a brand-scoped sanity check. Real gains need (a) a
-  bigger catalog with many images per model, and/or (b) a retrieval-tuned
-  embedder (DINOv2 / a shoe-fine-tuned model) instead of generic CLIP.
+- **Reality check (verified on a real 5,953-image catalog):** off-the-shelf
+  **CLIP ViT-B/32 is NOT good enough** for fine-grained sneaker retrieval. On
+  genuine cross-photo pairs its top-1 match was *wrong* and even crossed brands
+  (an Air Force 1 crop's nearest were Reebok/Vans/Converse; a Dunk's were
+  Cortez/Blazer), with all scores compressed ~0.78–0.84 regardless of
+  correctness — so no threshold separates right from wrong. The index
+  *infrastructure* is correct and reusable; the **embedder is the bottleneck**
+  (plus a domain gap: our top-down used-shoe table crops vs. clean product
+  shots). Next: swap CLIP for a retrieval/fine-grained embedder — **DINOv2**
+  first (local, designed for instance retrieval), then a shoe-fine-tuned model
+  trained on our growing labels (supercomputer). Until then the **Ollama VLM
+  remains the primary model-ID**, with the index at best a brand-scoped sanity
+  check. Brand-filtering also depends on Phase B brand recall (it returned
+  "unknown" for several pairs, disabling the filter).
 - **Next:** wire a hybrid into `identify_models` (VLM proposes → CLIP-index
   verifies, recording the similarity as the real confidence + the source); add a
   public dataset; on the supercomputer use a heavy Qwen-VL + a stronger embedder.

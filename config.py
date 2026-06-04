@@ -288,6 +288,10 @@ MODEL_MIN_CONF = 0.0                    # below this confidence -> "unknown". VL
 # (organized <brand>/<model>/*.jpg) AND our growing label_data. Select it with
 # MODEL_BACKEND="clip-index"; rebuild the index whenever the catalog changes.
 CLIP_CATALOG_DIR = "sneaker_impact/catalog"        # drop a public dataset here
+CLIP_DATASET_DIRS = [                              # flat <brand>_<model>/*.jpg
+    # public datasets (brand inferred from the class-folder name); combine many.
+    "downloads/popular_sneakers/sneakers-dataset/sneakers-dataset",
+]
 CLIP_INDEX_PATH = "sneaker_impact/clip_index.npz"  # built index (embeddings)
 CLIP_INDEX_MODEL = "ViT-B/32"          # CLIP variant -- MUST match for build+query
 CLIP_INDEX_MIN_SIM = 0.90              # cosine similarity below this -> "unknown".

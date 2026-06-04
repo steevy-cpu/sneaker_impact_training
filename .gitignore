@@ -36,3 +36,6 @@ sneaker_impact/catalog/*
 !sneaker_impact/catalog/README.md
 sneaker_impact/clip_index.npz
 sneaker_impact/clip_index.json
+
+# downloaded public datasets (Kaggle etc.)
+downloads/

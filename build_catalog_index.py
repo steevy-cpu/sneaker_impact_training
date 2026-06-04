@@ -56,6 +56,49 @@ def collect_catalog_dir(d):
     return entries
 
 
+# Brand inference for flat class-folder datasets (e.g. "nike_air_jordan_1_high").
+# Order matters: "jordan"/"yeezy" before their parent brand so they map to the
+# same labels Phase B uses (Jordan and Yeezy are their own brands there).
+_BRAND_RULES = [
+    ("jordan", "Jordan"), ("yeezy", "Yeezy"), ("new_balance", "New Balance"),
+    ("nike", "Nike"), ("adidas", "Adidas"), ("converse", "Converse"),
+    ("vans", "Vans"), ("puma", "Puma"), ("reebok", "Reebok"),
+    ("asics", "Asics"), ("salomon", "Salomon"),
+]
+
+
+def _infer_brand(class_name):
+    c = class_name.lower()
+    for kw, brand in _BRAND_RULES:
+        if kw in c:
+            return brand
+    return class_name.split("_")[0].title()
+
+
+def _pretty_model(class_name):
+    words = class_name.replace("_", " ").replace("-", " ").split()
+    return " ".join(w if w.isupper() else w.capitalize() for w in words)
+
+
+def collect_flat_dataset(d):
+    """Entries from a flat <brand>_<model>/*.jpg dataset (brand inferred)."""
+    entries = []
+    if not os.path.isdir(d):
+        print(f"  dataset dir not found: {d}")
+        return entries
+    for cls in sorted(os.listdir(d)):
+        cdir = os.path.join(d, cls)
+        if not os.path.isdir(cdir) or cls.startswith("._"):
+            continue
+        brand, model = _infer_brand(cls), _pretty_model(cls)
+        for name in sorted(os.listdir(cdir)):
+            if name.startswith("._") or not name.lower().endswith(_IMG_EXTS):
+                continue
+            entries.append({"image": os.path.join(cdir, name), "brand": brand,
+                            "model": model, "source": f"dataset:{cls}/{name}"})
+    return entries
+
+
 def collect_label_data(d):
     """Entries from our confirmed label_data (only ones that have a real model)."""
     entries = []
@@ -85,11 +128,16 @@ def main():
     ap = argparse.ArgumentParser(description="Build the CLIP catalog index.")
     ap.add_argument("--catalog", default=config.CLIP_CATALOG_DIR)
     ap.add_argument("--label-data", default=config.LABEL_DATA_DIR)
+    ap.add_argument("--dataset", action="append", default=[],
+                    help="flat <brand>_<model>/*.jpg dataset dir (repeatable)")
     ap.add_argument("--out", default=config.CLIP_INDEX_PATH)
     ap.add_argument("--model", default=config.CLIP_INDEX_MODEL)
     args = ap.parse_args()
 
+    dataset_dirs = args.dataset or getattr(config, "CLIP_DATASET_DIRS", [])
     entries = collect_catalog_dir(args.catalog) + collect_label_data(args.label_data)
+    for dd in dataset_dirs:
+        entries += collect_flat_dataset(dd)
     if not entries:
         print(f"No catalog images found. Drop a dataset under '{args.catalog}' "
               f"(<brand>/<model>/*.jpg) and/or confirm models into "
