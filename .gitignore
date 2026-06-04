@@ -27,3 +27,6 @@ models/*.onnx
 sneaker_impact/pairs/
 sneaker_impact/table_photos/
 table.jpg
+
+# Phase B curated export (high-confidence labeled crops)
+label_data/

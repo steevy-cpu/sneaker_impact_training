@@ -216,3 +216,44 @@ SEGMENT_PAIR_MAX_GAP = 1.2              # pair two shoes when the gap between
 # Where whole-table photos are read from and where per-pair crops are written.
 TABLE_INPUT_DIR = "sneaker_impact/table_photos"   # full-table photos land here
 TABLE_OUTPUT_ROOT = "sneaker_impact/pairs"        # per-pair crops + JSON go here
+TABLE_PHOTO_PREFIX = "table"            # incoming table photos are renamed
+                                        # table1.jpg, table2.jpg, ... by
+                                        # ingest_table.py, so every per-pair
+                                        # record's source_photo is logical and
+                                        # traceable (table3 -> pair_7, etc.).
+
+# --- Brand recognition (2026 pivot, Phase B) ------------------------------
+# Fill each pair's `make` field (the brand). Pluggable like the segmenter, so we
+# can start local + free now and later swap in a trained classifier (on the
+# supercomputer) or a vision-LLM API for higher accuracy.
+#   "clip" -- local zero-shot CLIP. No training, no API key, no cost: it compares
+#             the crop against text like "a photo of Nike shoes" and picks the
+#             closest brand. A solid baseline; logos are small so it won't be
+#             perfect -- the dashboard human-confirm is the safety net.
+BRAND_BACKEND = "clip"
+BRAND_MODEL = "ViT-B/32"                # CLIP variant (~340MB, auto-downloads
+                                        # once). Bigger (ViT-L/14) = better/slower.
+BRAND_DEVICE = "auto"                   # "auto" (CUDA->MPS->CPU) or cpu/mps/cuda
+BRAND_CLASSES = [                       # brands to choose from -- edit freely
+    "Nike", "Jordan", "Adidas", "Yeezy", "New Balance", "Converse", "Vans",
+    "Puma", "Reebok", "Asics", "Under Armour", "Saucony", "Brooks", "Hoka",
+    "Skechers", "Fila", "Salomon",
+]
+BRAND_PROMPT = "a photo of {} shoes"    # CLIP text template; {} = brand name
+BRAND_MIN_CONF = 0.35                   # if the top brand scores below this,
+                                        # label "unknown" instead of guessing.
+                                        # Zero-shot CLIP is confident+right on
+                                        # iconic brands (NB, Jordan, 3-stripes)
+                                        # but coin-flips plain shoes, so we don't
+                                        # commit weak guesses as fact -- they go
+                                        # to human/Phase-C review. 0 = always guess.
+
+# --- Curated label_data export (Phase B) ----------------------------------
+# Copy only the CONFIDENTLY labeled pairs -- both color (Phase A) and make
+# (Phase B) above their thresholds, and neither "unknown"/"multi" -- into a
+# clean, training-ready folder, named shoes_<color>_<make>_<N>.jpg
+# (e.g. shoes_blue_newBalance_1.jpg). This is the high-quality subset to hand to
+# the (out-of-scope) training step. Export is idempotent (dedups by source).
+LABEL_DATA_DIR = "label_data"
+LABEL_MAKE_MIN_CONF = 0.60              # brand confidence required to export
+LABEL_COLOR_MIN_CONF = 0.50             # color confidence required to export

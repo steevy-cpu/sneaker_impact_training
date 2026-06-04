@@ -73,6 +73,10 @@ Module responsibilities:
 | `segment_utils.py` | Backend-swappable table segmenter (YOLOE-26 / SAM 2) + tiling for dense recall → per-shoe `Segment`s. | Phase A done |
 | `pair_utils.py` | Group detected single shoes into tied pairs (one record per pair). | Phase A done |
 | `split_table.py` | Whole-table photo → segment → pair → per-pair crops + metadata JSON (make/model placeholders). | Phase A done |
+| `brand_utils.py` | Backend-swappable brand (make) recognizer; CLIP zero-shot baseline. | Phase B done |
+| `identify_brands.py` | Fill each pair JSON's `make`/`make_confidence` + export confident pairs. | Phase B done |
+| `label_export.py` | Copy confident (color+make) pairs to `label_data/` as `shoes_<color>_<make>_<N>.jpg`. | Phase B done |
+| `ingest_table.py` | Rename incoming table photos to `table1.jpg`, `table2.jpg`, … in `TABLE_INPUT_DIR`. | Phase B done |
 | `capture.py` | Original key-driven dataset capture tool (preserved). | existing |
 | `detect_test.py` | Original detector diagnostic (preserved). | existing |
 
@@ -320,6 +324,51 @@ python split_table.py table.jpg --backend sam2     # override SEGMENT_BACKEND
 - **Next phases:** B = brand recognition (`brand_utils.py`), C = model lookup
   via a sneaker DB/API (`model_search.py`), then storage/dashboard remap and the
   Airtable intake link.
+
+## Brand recognition (2026 pivot, Phase B)
+
+Fill each pair crop's `make` (brand) field.
+
+```bash
+python identify_brands.py --dry-run        # print brand guesses, write nothing
+python identify_brands.py                  # write make + make_confidence to JSONs
+python identify_brands.py --folder pairs06042026
+python identify_brands.py --force          # re-label even pairs that have a make
+```
+
+- `brand_utils.build_brand_classifier(config)` → a `BrandClassifier` whose
+  `classify(image_bgr)` returns `(make, confidence)`. Backend `"clip"` =
+  OpenAI CLIP zero-shot (local, no API/training): it embeds the crop and each
+  `config.BRAND_PROMPT.format(brand)` text and picks the closest of
+  `config.BRAND_CLASSES`. Fail-safe → `("unknown", None)`.
+- `identify_brands.py` walks the `pairs*` folders and writes `make` +
+  `make_confidence` into each pair JSON. Idempotent (skips ones already labeled
+  unless `--force`).
+- **Accuracy reality (verified on 16 pairs):** zero-shot CLIP nails iconic
+  high-confidence brands (Jordan 0.95, Adidas/3-stripes 0.91, New Balance/"N"
+  0.89 — all correct) but can be **confidently wrong in the mid band** (a New
+  Balance pair came back "Saucony" at 0.47). `config.BRAND_MIN_CONF` (0.35)
+  routes weak guesses to `"unknown"`, but mid-confidence still needs the
+  dashboard human-confirm. The real accuracy upgrade is a trained brand
+  classifier on the supercomputer (or a vision-LLM backend) — the interface is
+  built to swap either in without touching callers.
+- **Curated export to `label_data/`** (`label_export.py`): after labeling,
+  `identify_brands.py` copies only the pairs whose color AND make are both
+  confident (`LABEL_COLOR_MIN_CONF` / `LABEL_MAKE_MIN_CONF`) and neither is
+  `"unknown"`/`"multi"` into `label_data/` as `shoes_<color>_<make>_<N>.jpg`
+  (make in lowerCamelCase, e.g. `shoes_blue_newBalance_1.jpg`) plus a label
+  JSON. Idempotent — dedups by `(source_photo, source_pair)`, so re-runs don't
+  duplicate. This is the clean, training-ready subset (git-ignored).
+- **Logical table-photo names** (`ingest_table.py`): incoming photos are renamed
+  to `table1.jpg`, `table2.jpg`, … in `TABLE_INPUT_DIR` (`TABLE_PHOTO_PREFIX`),
+  so each pair's `source_photo` is traceable. Workflow:
+  `python ingest_table.py raw.jpg` → `python split_table.py --all`.
+- **`bbox`** in a pair's JSON = `[x1, y1, x2, y2]` pixel rectangle of that pair
+  within the source photo (top-left origin), i.e. where on the table it was.
+
+- **Next (Phase C):** `model_search.py` — given the crop + the confirmed make,
+  look up the specific MODEL via a sneaker DB/API (Sneaks-API / KicksDB) and
+  fill `model`/`model_confidence`/`model_sources`.
 
 ## Detection model: YOLO-World vs OIV7
 
