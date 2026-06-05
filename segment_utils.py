@@ -194,16 +194,30 @@ class TiledSegmenter(Segmenter):
     map detections back to full-image coords, and merge duplicates. The recall
     fix for dense tables of many small shoes."""
 
-    def __init__(self, base, tile, overlap, iou_merge):
+    def __init__(self, base, tile, overlap, iou_merge, include_full=True):
         self.base = base
         self.tile = tile
         self.overlap = overlap
         self.iou_merge = iou_merge
+        # Also run one pass on the WHOLE image and merge it with the tile
+        # detections. Tiling alone misses large, well-separated shoes on a
+        # SPARSE table: each tile sees only a slice of a big shoe, so the
+        # open-vocab confidence drops below threshold and nothing survives
+        # (observed: a 3-pair table -> 0 tiled detections). The full pass
+        # catches those; the tiles still add the small/dense shoes a single
+        # wide pass downsamples away on a CROWDED table. Best of both; the
+        # merge dedups the overlap, so recall only ever goes up.
+        self.include_full = include_full
 
     def segment(self, image):
         h, w = image.shape[:2]
         windows = _tile_windows(w, h, self.tile, self.overlap)
         raw = []
+        full_n = 0
+        if self.include_full:
+            full = self.base.segment(image)   # whole-image coords already
+            raw.extend(full)
+            full_n = len(full)
         for (x0, y0, x1, y1) in windows:
             for s in self.base.segment(image[y0:y1, x0:x1]):
                 bx1, by1, bx2, by2 = s.bbox
@@ -215,8 +229,8 @@ class TiledSegmenter(Segmenter):
                 raw.append(Segment((bx1 + x0, by1 + y0, bx2 + x0, by2 + y0),
                                    s.score, s.label, poly))
         merged = _merge(raw, self.iou_merge)
-        print(f"[segment] tiled: {len(windows)} tiles -> {len(raw)} raw -> "
-              f"{len(merged)} merged")
+        print(f"[segment] tiled: {len(windows)} tiles + {full_n} full -> "
+              f"{len(raw)} raw -> {len(merged)} merged")
         return merged
 
 
@@ -271,5 +285,6 @@ def build_segmenter(cfg=None):
     if tile and tile > 0:
         overlap = getattr(cfg, "SEGMENT_TILE_OVERLAP", 0.25)
         iou_merge = getattr(cfg, "SEGMENT_TILE_IOU", 0.4)
-        return TiledSegmenter(base, tile, overlap, iou_merge)
+        include_full = getattr(cfg, "SEGMENT_TILE_INCLUDE_FULL", True)
+        return TiledSegmenter(base, tile, overlap, iou_merge, include_full)
     return base
