@@ -178,7 +178,9 @@ def pair_shoes_visual(image, segments, embedder,
         used_local.update((a, b))
         i, j = ok_idx[a], ok_idx[b]
         used_global.update((i, j))
-        result.append(_union(segments[i], segments[j]))
+        merged = _union(segments[i], segments[j])
+        merged.pair_score = float(cos)        # visual similarity of the two shoes
+        result.append(merged)
         if log:
             log(f"[pair] {i}+{j} cos={cos:.3f} score={score:.3f} -> PAIR")
 
