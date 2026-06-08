@@ -210,11 +210,26 @@ SEGMENT_PAIR = True                     # shoes arrive tied in pairs -> group th
                                         # detected single shoes into pairs, one
                                         # record per pair (the union crop). False
                                         # = keep one record per individual shoe.
-SEGMENT_PAIR_MAX_GAP = 1.2              # pair two shoes when the gap between
-                                        # their centers is within this multiple
-                                        # of their average size. Lower = stricter
-                                        # (won't bridge the gap between pairs);
-                                        # higher = more eager to pair.
+SEGMENT_PAIR_MAX_GAP = 1.2              # "geometry" method only: pair two shoes
+                                        # when the gap between their centers is
+                                        # within this multiple of their average
+                                        # size. Lower = stricter (won't bridge the
+                                        # gap between pairs); higher = more eager.
+SEGMENT_PAIR_METHOD = "visual"          # "visual" = pair by APPEARANCE (DINOv2/
+                                        # CLIP embedding similarity + a soft
+                                        # spatial tiebreak) so shoes need NOT be
+                                        # tied or placed adjacently -- workers can
+                                        # just lay them on the table. "geometry" =
+                                        # legacy nearest-neighbour (needs tied/
+                                        # adjacent pairs; uses SEGMENT_PAIR_MAX_GAP).
+SEGMENT_PAIR_SPATIAL_WEIGHT = 0.15      # "visual" only: how much closeness on the
+                                        # table breaks ties between similar-looking
+                                        # shoes. 0 = pure appearance.
+SEGMENT_PAIR_MIN_SIM = 0.5             # "visual" only: accept a pair only if its
+                                        # blended score (cosine - spatial*dist) is
+                                        # >= this; below -> both shoes become
+                                        # singles. TUNE on real photos -- the engine
+                                        # logs each pair's cosine + score to stderr.
 
 # Where whole-table photos are read from and where per-pair crops are written.
 TABLE_INPUT_DIR = "sneaker_impact/table_photos"   # full-table photos land here
