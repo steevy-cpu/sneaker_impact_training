@@ -198,6 +198,25 @@ SEGMENT_TILE_OVERLAP = 0.25             # fraction adjacent tiles overlap, so a
 SEGMENT_TILE_IOU = 0.4                  # merge two detections from different
                                         # tiles when they overlap by >= this IoU
                                         # (the higher-confidence one is kept).
+SEGMENT_TILE_IMGSZ = 640                # inference resolution for the TILES
+                                        # (the full pass uses SEGMENT_IMGSZ).
+                                        # Must stay near the tile size: running
+                                        # a 512px tile at 1280 upscales 2.5x and
+                                        # collapses confidence below SEGMENT_CONF
+                                        # -- tiles silently return nothing.
+SEGMENT_TILER = "custom"                # which tiler to use when SEGMENT_TILE>0:
+                                        # "custom" = the hand-rolled TiledSegmenter
+                                        # (greedy IoU+containment NMS); "sahi" =
+                                        # the SAHI library's slicing + Greedy
+                                        # NMM/NMS merge (obss/sahi, MIT). Same
+                                        # base model either way -- swap to A/B the
+                                        # tiling logic alone. See ab_tiling.py.
+SEGMENT_SAHI_MERGE = "NMS"              # sahi tiler only: "NMS" (suppress, keep
+                                        # winner box -- closest to custom) or
+                                        # "NMM" (merge overlaps into their union).
+SEGMENT_SAHI_METRIC = "IOS"            # sahi tiler only: overlap metric for the
+                                        # merge -- "IOS" (intersection-over-smaller,
+                                        # good for tile-seam partials) or "IOU".
 SEGMENT_CROP_PAD = 0.04                 # pad each crop by this fraction of bbox
                                         # size on every side (a little context
                                         # helps the make/model step). 0 = tight.
@@ -225,11 +244,15 @@ SEGMENT_PAIR_METHOD = "visual"          # "visual" = pair by APPEARANCE (DINOv2/
 SEGMENT_PAIR_SPATIAL_WEIGHT = 0.15      # "visual" only: how much closeness on the
                                         # table breaks ties between similar-looking
                                         # shoes. 0 = pure appearance.
-SEGMENT_PAIR_MIN_SIM = 0.5             # "visual" only: accept a pair only if its
+SEGMENT_PAIR_MIN_SIM = 0.65            # "visual" only: accept a pair only if its
                                         # blended score (cosine - spatial*dist) is
                                         # >= this; below -> both shoes become
-                                        # singles. TUNE on real photos -- the engine
-                                        # logs each pair's cosine + score to stderr.
+                                        # singles. True-mate cosines measured on
+                                        # real tables cluster 0.69-0.85, while
+                                        # 0.5 let different-but-similar runners
+                                        # pair across the table. TUNE on real
+                                        # photos -- the engine logs each pair's
+                                        # cosine + score to stderr.
 
 # Where whole-table photos are read from and where per-pair crops are written.
 TABLE_INPUT_DIR = "sneaker_impact/table_photos"   # full-table photos land here

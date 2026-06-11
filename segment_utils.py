@@ -194,11 +194,18 @@ class TiledSegmenter(Segmenter):
     map detections back to full-image coords, and merge duplicates. The recall
     fix for dense tables of many small shoes."""
 
-    def __init__(self, base, tile, overlap, iou_merge, include_full=True):
+    def __init__(self, base, tile, overlap, iou_merge, include_full=True,
+                 tile_imgsz=0):
         self.base = base
         self.tile = tile
         self.overlap = overlap
         self.iou_merge = iou_merge
+        # Tiles must be inferred near their OWN size, not at SEGMENT_IMGSZ:
+        # that value is sized for the full photo, and blowing a 512px tile up
+        # to e.g. 1280 pushes the shoes far outside the model's training scale,
+        # so confidence collapses below SEGMENT_CONF and tiles return nothing
+        # (observed: 13/15 tiles -> 0 detections on a real 14-pair table).
+        self.tile_imgsz = tile_imgsz
         # Also run one pass on the WHOLE image and merge it with the tile
         # detections. Tiling alone misses large, well-separated shoes on a
         # SPARSE table: each tile sees only a slice of a big shoe, so the
@@ -219,7 +226,7 @@ class TiledSegmenter(Segmenter):
             raw.extend(full)
             full_n = len(full)
         for (x0, y0, x1, y1) in windows:
-            for s in self.base.segment(image[y0:y1, x0:x1]):
+            for s in self._segment_tile(image[y0:y1, x0:x1]):
                 bx1, by1, bx2, by2 = s.bbox
                 poly = None
                 if s.polygon is not None:
@@ -232,6 +239,124 @@ class TiledSegmenter(Segmenter):
         print(f"[segment] tiled: {len(windows)} tiles + {full_n} full -> "
               f"{len(raw)} raw -> {len(merged)} merged")
         return merged
+
+    def _segment_tile(self, tile_img):
+        """Run the base segmenter on one tile at the tile-sized resolution
+        (see __init__). Backends without an imgsz (sam2) run unchanged."""
+        old = getattr(self.base, "imgsz", None)
+        if self.tile_imgsz and old is not None:
+            self.base.imgsz = self.tile_imgsz
+        try:
+            return self.base.segment(tile_img)
+        finally:
+            if old is not None:
+                self.base.imgsz = old
+
+
+class SahiTiledSegmenter(Segmenter):
+    """SAHI-powered tiling: slice with SAHI's geometry (`get_slice_bboxes`) and
+    merge cross-tile duplicates with SAHI's battle-tested Greedy NMM/NMS
+    postprocess, while reusing the SAME base Segmenter as the custom tiler.
+
+    This is a true A/B of *SAHI's windowing + merge* against `TiledSegmenter`:
+    the model, prompts, masks, device, and tile inference resolution are held
+    identical, so any difference in recall/precision is the tiling logic alone.
+
+    Merge knobs (mirror SAHI):
+      merge: "NMS" suppresses overlapping boxes keeping the winner's box as-is
+             (closest to our greedy `_merge`); "NMM" merges overlaps into their
+             union (better at stitching a shoe split across a tile seam, but can
+             fuse two shoes that sit very close together).
+      metric: "IOS" = intersection-over-smaller (catches tile-seam partials that
+             a small partial box makes — same intent as our `_containment`);
+             "IOU" = classic intersection-over-union.
+    """
+
+    def __init__(self, base, tile, overlap, match_threshold, merge="NMS",
+                 metric="IOS", include_full=True, tile_imgsz=0):
+        self.base = base
+        self.tile = tile
+        self.overlap = overlap
+        self.match_threshold = match_threshold
+        self.merge = (merge or "NMS").upper()
+        self.metric = (metric or "IOS").upper()
+        self.include_full = include_full
+        self.tile_imgsz = tile_imgsz
+
+    def _segment_tile(self, tile_img):
+        """Run the base segmenter on one tile at the tile-sized resolution
+        (identical to TiledSegmenter so the A/B holds the model constant)."""
+        old = getattr(self.base, "imgsz", None)
+        if self.tile_imgsz and old is not None:
+            self.base.imgsz = self.tile_imgsz
+        try:
+            return self.base.segment(tile_img)
+        finally:
+            if old is not None:
+                self.base.imgsz = old
+
+    def segment(self, image):
+        try:
+            from sahi.slicing import get_slice_bboxes
+            from sahi.prediction import ObjectPrediction
+            from sahi.postprocess.combine import (GreedyNMMPostprocess,
+                                                  NMSPostprocess)
+        except Exception as exc:                     # noqa: BLE001 - fail safe
+            print(f"[segment] SAHI unavailable ({exc}); returning base segment.")
+            return self.base.segment(image)
+
+        h, w = image.shape[:2]
+        windows = get_slice_bboxes(
+            image_height=h, image_width=w,
+            slice_height=self.tile, slice_width=self.tile,
+            auto_slice_resolution=False,
+            overlap_height_ratio=self.overlap, overlap_width_ratio=self.overlap)
+
+        # Collect every detection in full-image coords, preserving polygons, and
+        # stash each source Segment on its ObjectPrediction so we can recover the
+        # mask after the merge (SAHI returns the surviving source objects).
+        segs = []
+        full_n = 0
+        if self.include_full:
+            full = self.base.segment(image)
+            segs.extend(full)
+            full_n = len(full)
+        for (x0, y0, x1, y1) in windows:
+            for s in self._segment_tile(image[y0:y1, x0:x1]):
+                bx1, by1, bx2, by2 = s.bbox
+                poly = None
+                if s.polygon is not None:
+                    poly = s.polygon.copy()
+                    poly[:, 0] += x0
+                    poly[:, 1] += y0
+                segs.append(Segment((bx1 + x0, by1 + y0, bx2 + x0, by2 + y0),
+                                    s.score, s.label, poly))
+
+        ops = []
+        for s in segs:
+            op = ObjectPrediction(
+                bbox=[float(v) for v in s.bbox], category_id=0,
+                category_name=str(s.label or "shoe"), score=float(s.score),
+                full_shape=[h, w])
+            op._src_segment = s                       # recover polygon/label later
+            ops.append(op)
+
+        PP = GreedyNMMPostprocess if self.merge == "NMM" else NMSPostprocess
+        postprocess = PP(match_threshold=self.match_threshold,
+                         match_metric=self.metric, class_agnostic=True)
+        kept = postprocess(ops)
+
+        out = []
+        for op in kept:
+            x1b, y1b, x2b, y2b = [int(v) for v in op.bbox.to_xyxy()]
+            src = getattr(op, "_src_segment", None)
+            poly = src.polygon if src is not None else None
+            label = src.label if src is not None else "shoe"
+            out.append(Segment((x1b, y1b, x2b, y2b), op.score.value, label, poly))
+        print(f"[segment] sahi-tiled ({self.merge}/{self.metric}): "
+              f"{len(windows)} tiles + {full_n} full -> {len(segs)} raw -> "
+              f"{len(out)} merged")
+        return out
 
 
 def _segments_from_result(results, default_label="shoe"):
@@ -286,5 +411,13 @@ def build_segmenter(cfg=None):
         overlap = getattr(cfg, "SEGMENT_TILE_OVERLAP", 0.25)
         iou_merge = getattr(cfg, "SEGMENT_TILE_IOU", 0.4)
         include_full = getattr(cfg, "SEGMENT_TILE_INCLUDE_FULL", True)
-        return TiledSegmenter(base, tile, overlap, iou_merge, include_full)
+        tile_imgsz = getattr(cfg, "SEGMENT_TILE_IMGSZ", 640)
+        tiler = getattr(cfg, "SEGMENT_TILER", "custom").lower()
+        if tiler == "sahi":
+            merge = getattr(cfg, "SEGMENT_SAHI_MERGE", "NMS")
+            metric = getattr(cfg, "SEGMENT_SAHI_METRIC", "IOS")
+            return SahiTiledSegmenter(base, tile, overlap, iou_merge, merge,
+                                      metric, include_full, tile_imgsz)
+        return TiledSegmenter(base, tile, overlap, iou_merge, include_full,
+                              tile_imgsz)
     return base
