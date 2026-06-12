@@ -1,0 +1,28 @@
+{
+  "_about": [
+    "Ground truth for the tiling/segmentation eval (eval_tiling.py).",
+    "gt_shoes = SINGLE shoes visibly present in the photo (the unit the",
+    "segmenter detects; pairing happens later). Counted visually by Claude on",
+    "2026-06-12 (gt_quality=estimated, tolerance ~+/-2, dense photos +/-4) --",
+    "correct any entry and set gt_quality to 'confirmed'.",
+    "IMPORTANT: worker_pairs (the box counts entered at capture) is BOX-level",
+    "truth, NOT photo truth: tables show one table-load, workers stack pairs,",
+    "and two photos with box data had EMPTY tables. Do not eval against it;",
+    "it is kept for context only."
+  ],
+  "photos": [
+    {"image": "TBL-20260605-0004.jpg", "gt_shoes": 0,  "gt_quality": "confirmed", "worker_pairs": 1,  "notes": "empty table (negative control) -- box data entered with no shoes laid out"},
+    {"image": "TBL-20260609-0065.jpg", "gt_shoes": 0,  "gt_quality": "confirmed", "worker_pairs": 7,  "notes": "empty table (negative control)"},
+    {"image": "TBL-20260611-0021.jpg", "gt_shoes": 22, "gt_quality": "estimated", "worker_pairs": 20, "notes": "pairs stacked one-on-top; sparse-medium"},
+    {"image": "TBL-20260612-0017.jpg", "gt_shoes": 24, "gt_quality": "estimated", "worker_pairs": 21, "notes": "pairs stacked; medium"},
+    {"image": "TBL-20260610-0004.jpg", "gt_shoes": 28, "gt_quality": "estimated", "worker_pairs": 17, "notes": "mostly unstacked; medium"},
+    {"image": "TBL-20260612-0012.jpg", "gt_shoes": 30, "gt_quality": "estimated", "worker_pairs": 23, "notes": "stacked pairs; medium"},
+    {"image": "TBL-20260608-0018.jpg", "gt_shoes": 32, "gt_quality": "estimated", "worker_pairs": 25, "notes": "unstacked, clean layout; medium"},
+    {"image": "TBL-20260611-0005.jpg", "gt_shoes": 34, "gt_quality": "estimated", "worker_pairs": 22, "notes": "stacked pairs, 5 columns; medium-dense"},
+    {"image": "TBL-20260609-0009.jpg", "gt_shoes": 36, "gt_quality": "estimated", "worker_pairs": 48, "notes": "stacked pairs; worker count is whole box, photo shows one table-load"},
+    {"image": "TBL-20260610-0027.jpg", "gt_shoes": 36, "gt_quality": "estimated", "worker_pairs": 26, "notes": "stacked pairs, 6 columns; dense"},
+    {"image": "TBL-20260610-0045.jpg", "gt_shoes": 40, "gt_quality": "estimated", "worker_pairs": 30, "notes": "dense, stacked; +/-4"},
+    {"image": "TBL-20260608-0029.jpg", "gt_shoes": 43, "gt_quality": "estimated", "worker_pairs": 28, "notes": "densest 1080p in set, mostly unstacked; +/-4"},
+    {"image": "TBL-20260604-0001.jpg", "gt_shoes": 70, "gt_quality": "estimated", "worker_pairs": null, "notes": "legacy 8000x6000 phone photo, extreme white-on-white pile; +/-8; stress case"}
+  ]
+}
