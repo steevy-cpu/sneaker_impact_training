@@ -53,6 +53,12 @@ class Segmenter:
     def segment(self, image):
         raise NotImplementedError
 
+    def segment_batch(self, images):
+        """Segment several images; returns one list[Segment] per input image.
+        Default = sequential loop, so every backend works unchanged; backends
+        that support true batching (YOLOE) override this for speed."""
+        return [self.segment(im) for im in images]
+
 
 class YoloeSegmenter(Segmenter):
     """YOLOE open-vocabulary segmentation (text-prompted). AGPL-3.0."""
@@ -97,6 +103,26 @@ class YoloeSegmenter(Segmenter):
             print(f"[segment] inference failed: {exc}")
             return []
         return _segments_from_result(results)
+
+    def segment_batch(self, images):
+        """True batched inference: one predict() call for the whole list, so
+        the per-call overhead (preprocess setup, device sync, NMS dispatch) is
+        paid once instead of once per tile. Ultralytics letterboxes each image
+        to imgsz independently, so the detections are the same as the
+        sequential path. Fail-safe: any batch error falls back per-image."""
+        if not images:
+            return []
+        if self.model is None:
+            return [[] for _ in images]
+        try:
+            results = self.model.predict(
+                images, conf=self.conf, imgsz=self.imgsz,
+                device=self.device, verbose=False)
+        except Exception as exc:                     # noqa: BLE001 - fail safe
+            print(f"[segment] batch inference failed ({exc}); "
+                  "falling back to per-image.")
+            return [self.segment(im) for im in images]
+        return [_segments_from_one(r) for r in results]
 
 
 class Sam2Segmenter(Segmenter):
@@ -195,11 +221,19 @@ class TiledSegmenter(Segmenter):
     fix for dense tables of many small shoes."""
 
     def __init__(self, base, tile, overlap, iou_merge, include_full=True,
-                 tile_imgsz=0):
+                 tile_imgsz=0, tile_batch=8):
         self.base = base
         self.tile = tile
         self.overlap = overlap
         self.iou_merge = iou_merge
+        # Tiles are inferred in chunks of this many per predict() call. One
+        # call per tile wastes most of the time on fixed per-call overhead
+        # (a 1080p photo = 16 calls; the 8000x6000 outlier = 337). Batching
+        # pays that overhead once per chunk. Kept bounded (not "all tiles at
+        # once") so VRAM stays predictable on the shared GPU -- the dash box
+        # also runs ollama + DINOv2, and the website must never stall behind
+        # a VRAM spike. 1 = the old sequential behavior.
+        self.tile_batch = max(1, int(tile_batch or 1))
         # Tiles must be inferred near their OWN size, not at SEGMENT_IMGSZ:
         # that value is sized for the full photo, and blowing a 512px tile up
         # to e.g. 1280 pushes the shoes far outside the model's training scale,
@@ -225,29 +259,61 @@ class TiledSegmenter(Segmenter):
             full = self.base.segment(image)   # whole-image coords already
             raw.extend(full)
             full_n = len(full)
-        for (x0, y0, x1, y1) in windows:
-            for s in self._segment_tile(image[y0:y1, x0:x1]):
+        h, w = image.shape[:2]
+        seam_cut = []
+        tile_segs = self._segment_tiles(
+            [image[y0:y1, x0:x1] for (x0, y0, x1, y1) in windows])
+        for (x0, y0, x1, y1), segs_in_tile in zip(windows, tile_segs):
+            for s in segs_in_tile:
                 bx1, by1, bx2, by2 = s.bbox
                 poly = None
                 if s.polygon is not None:
                     poly = s.polygon.copy()
                     poly[:, 0] += x0
                     poly[:, 1] += y0
-                raw.append(Segment((bx1 + x0, by1 + y0, bx2 + x0, by2 + y0),
-                                   s.score, s.label, poly))
+                seg = Segment((bx1 + x0, by1 + y0, bx2 + x0, by2 + y0),
+                              s.score, s.label, poly)
+                # A box touching a tile edge that is NOT an image edge is a
+                # truncated shoe. Keeping it in the main pool is harmful twice
+                # over: it becomes a sliver crop, and in _merge a high-scoring
+                # partial can suppress the COMPLETE box of the same shoe
+                # (greedy NMS keeps the higher score). But don't discard it:
+                # if no clean box covers that region at all, the partial is
+                # the only evidence of that shoe — re-add it as a last resort.
+                m = 2  # px tolerance
+                if ((bx1 <= m and x0 > 0) or (by1 <= m and y0 > 0)
+                        or (bx2 >= (x1 - x0) - m and x1 < w)
+                        or (by2 >= (y1 - y0) - m and y1 < h)):
+                    seam_cut.append(seg)
+                else:
+                    raw.append(seg)
         merged = _merge(raw, self.iou_merge)
+        rescued = 0
+        for s in _merge(seam_cut, self.iou_merge):       # dedup partials first
+            if all(_iou(s.bbox, k.bbox) < self.iou_merge
+                   and _containment(s.bbox, k.bbox) < 0.3 for k in merged):
+                merged.append(s)
+                rescued += 1
         print(f"[segment] tiled: {len(windows)} tiles + {full_n} full -> "
-              f"{len(raw)} raw -> {len(merged)} merged")
+              f"{len(raw)} raw + {len(seam_cut)} seam-cut "
+              f"({rescued} rescued) -> {len(merged)} merged")
         return merged
 
-    def _segment_tile(self, tile_img):
-        """Run the base segmenter on one tile at the tile-sized resolution
-        (see __init__). Backends without an imgsz (sam2) run unchanged."""
+    def _segment_tiles(self, tile_imgs):
+        """Run the base segmenter on all tiles at the tile-sized resolution
+        (see __init__), in chunks of tile_batch per predict() call. Returns
+        one list[Segment] per tile, in order. Backends without a real batch
+        path fall back to Segmenter.segment_batch's sequential loop, so
+        behavior is identical either way -- only the call count changes."""
         old = getattr(self.base, "imgsz", None)
         if self.tile_imgsz and old is not None:
             self.base.imgsz = self.tile_imgsz
         try:
-            return self.base.segment(tile_img)
+            out = []
+            for i in range(0, len(tile_imgs), self.tile_batch):
+                out.extend(self.base.segment_batch(
+                    tile_imgs[i:i + self.tile_batch]))
+            return out
         finally:
             if old is not None:
                 self.base.imgsz = old
@@ -360,11 +426,18 @@ class SahiTiledSegmenter(Segmenter):
 
 
 def _segments_from_result(results, default_label="shoe"):
-    """Convert an ultralytics Results object into a list[Segment]."""
-    segs = []
+    """Convert an ultralytics predict() return (list of Results) -- reads the
+    FIRST Results object, i.e. the single-image path."""
     if not results:
+        return []
+    return _segments_from_one(results[0], default_label)
+
+
+def _segments_from_one(r, default_label="shoe"):
+    """Convert ONE ultralytics Results object into a list[Segment]."""
+    segs = []
+    if r is None:
         return segs
-    r = results[0]
     names = getattr(r, "names", {}) or {}
     polys = r.masks.xy if getattr(r, "masks", None) is not None else None
     boxes = getattr(r, "boxes", None)
@@ -412,6 +485,7 @@ def build_segmenter(cfg=None):
         iou_merge = getattr(cfg, "SEGMENT_TILE_IOU", 0.4)
         include_full = getattr(cfg, "SEGMENT_TILE_INCLUDE_FULL", True)
         tile_imgsz = getattr(cfg, "SEGMENT_TILE_IMGSZ", 640)
+        tile_batch = getattr(cfg, "SEGMENT_TILE_BATCH", 8)
         tiler = getattr(cfg, "SEGMENT_TILER", "custom").lower()
         if tiler == "sahi":
             merge = getattr(cfg, "SEGMENT_SAHI_MERGE", "NMS")
@@ -419,5 +493,5 @@ def build_segmenter(cfg=None):
             return SahiTiledSegmenter(base, tile, overlap, iou_merge, merge,
                                       metric, include_full, tile_imgsz)
         return TiledSegmenter(base, tile, overlap, iou_merge, include_full,
-                              tile_imgsz)
+                              tile_imgsz, tile_batch)
     return base

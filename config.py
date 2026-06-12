@@ -204,6 +204,15 @@ SEGMENT_TILE_IMGSZ = 640                # inference resolution for the TILES
                                         # a 512px tile at 1280 upscales 2.5x and
                                         # collapses confidence below SEGMENT_CONF
                                         # -- tiles silently return nothing.
+SEGMENT_TILE_BATCH = 8                  # tiles per GPU predict() call. One call
+                                        # per tile (the old behavior, = 1) wastes
+                                        # most of the time on fixed per-call
+                                        # overhead; chunks of 8 cut segmentation
+                                        # wall-time ~2-4x with identical output.
+                                        # Bounded (not all-at-once) so VRAM stays
+                                        # predictable on the shared GPU (ollama +
+                                        # DINOv2 + engine) and the dash website
+                                        # never stalls behind a VRAM spike.
 SEGMENT_TILER = "custom"                # which tiler to use when SEGMENT_TILE>0:
                                         # "custom" = the hand-rolled TiledSegmenter
                                         # (greedy IoU+containment NMS); "sahi" =
@@ -234,7 +243,14 @@ SEGMENT_PAIR_MAX_GAP = 1.2              # "geometry" method only: pair two shoes
                                         # within this multiple of their average
                                         # size. Lower = stricter (won't bridge the
                                         # gap between pairs); higher = more eager.
-SEGMENT_PAIR_METHOD = "visual"          # "visual" = pair by APPEARANCE (DINOv2/
+SEGMENT_PAIR_METHOD = "hybrid"          # "hybrid" (default) = ADJACENCY first
+                                        # (workers place mates touching/stacked)
+                                        # with a DINOv2 appearance veto + a
+                                        # high-bar visual rescue for separated
+                                        # mates. Chosen over "visual" because
+                                        # measured cosines rank silhouette over
+                                        # identity (strangers 0.87 > mates 0.41).
+                                        # "visual" = pair by APPEARANCE (DINOv2/
                                         # CLIP embedding similarity + a soft
                                         # spatial tiebreak) so shoes need NOT be
                                         # tied or placed adjacently -- workers can
@@ -244,6 +260,16 @@ SEGMENT_PAIR_METHOD = "visual"          # "visual" = pair by APPEARANCE (DINOv2/
 SEGMENT_PAIR_SPATIAL_WEIGHT = 0.15      # "visual" only: how much closeness on the
                                         # table breaks ties between similar-looking
                                         # shoes. 0 = pure appearance.
+SEGMENT_PAIR_VETO_MIN = 0.25            # "hybrid" only: an ADJACENT candidate is
+                                        # rejected when its crops' cosine is below
+                                        # this (clearly different objects). True
+                                        # mates in awkward poses measured 0.41-0.49,
+                                        # so keep this floor well under that.
+SEGMENT_PAIR_RESCUE_MIN = 0.80          # "hybrid" only: NON-adjacent shoes pair
+                                        # only when they look near-identical
+                                        # (cos >= this). High on purpose: a gray
+                                        # Brooks scored 0.87 against a white one,
+                                        # so rescue is a last resort, not the rule.
 SEGMENT_PAIR_MIN_SIM = 0.65            # "visual" only: accept a pair only if its
                                         # blended score (cosine - spatial*dist) is
                                         # >= this; below -> both shoes become
