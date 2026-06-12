@@ -221,7 +221,8 @@ class TiledSegmenter(Segmenter):
     fix for dense tables of many small shoes."""
 
     def __init__(self, base, tile, overlap, iou_merge, include_full=True,
-                 tile_imgsz=0, tile_batch=8, max_side=0):
+                 tile_imgsz=0, tile_batch=8, max_side=0,
+                 seam_px=2, rescue_contain=0.3):
         self.base = base
         self.tile = tile
         self.overlap = overlap
@@ -236,6 +237,12 @@ class TiledSegmenter(Segmenter):
         # back to ORIGINAL coords, so callers still crop from the full-res
         # photo (brand/cloud-ID quality is untouched). 0 = no cap.
         self.max_side = int(max_side or 0)
+        # Seam-cut handling knobs (see the comment in _segment_work): a box
+        # within seam_px of a tile edge that isn't an image edge is treated as
+        # a truncated partial; a deduped partial is rescued only if it overlaps
+        # every kept box by less than rescue_contain (containment).
+        self.seam_px = int(seam_px)
+        self.rescue_contain = float(rescue_contain)
         # Tiles are inferred in chunks of this many per predict() call. One
         # call per tile wastes most of the time on fixed per-call overhead
         # (a 1080p photo = 16 calls; the 8000x6000 outlier = 337). Batching
@@ -313,7 +320,7 @@ class TiledSegmenter(Segmenter):
                 # (greedy NMS keeps the higher score). But don't discard it:
                 # if no clean box covers that region at all, the partial is
                 # the only evidence of that shoe — re-add it as a last resort.
-                m = 2  # px tolerance
+                m = self.seam_px  # px tolerance
                 if ((bx1 <= m and x0 > 0) or (by1 <= m and y0 > 0)
                         or (bx2 >= (x1 - x0) - m and x1 < w)
                         or (by2 >= (y1 - y0) - m and y1 < h)):
@@ -324,7 +331,8 @@ class TiledSegmenter(Segmenter):
         rescued = 0
         for s in _merge(seam_cut, self.iou_merge):       # dedup partials first
             if all(_iou(s.bbox, k.bbox) < self.iou_merge
-                   and _containment(s.bbox, k.bbox) < 0.3 for k in merged):
+                   and _containment(s.bbox, k.bbox) < self.rescue_contain
+                   for k in merged):
                 merged.append(s)
                 rescued += 1
         print(f"[segment] tiled: {len(windows)} tiles + {full_n} full -> "
@@ -520,6 +528,8 @@ def build_segmenter(cfg=None):
         tile_imgsz = getattr(cfg, "SEGMENT_TILE_IMGSZ", 640)
         tile_batch = getattr(cfg, "SEGMENT_TILE_BATCH", 8)
         max_side = getattr(cfg, "SEGMENT_MAX_SIDE", 0)
+        seam_px = getattr(cfg, "SEGMENT_SEAM_PX", 2)
+        rescue_contain = getattr(cfg, "SEGMENT_RESCUE_CONTAIN", 0.3)
         tiler = getattr(cfg, "SEGMENT_TILER", "custom").lower()
         if tiler == "sahi":
             merge = getattr(cfg, "SEGMENT_SAHI_MERGE", "NMS")
@@ -527,5 +537,6 @@ def build_segmenter(cfg=None):
             return SahiTiledSegmenter(base, tile, overlap, iou_merge, merge,
                                       metric, include_full, tile_imgsz)
         return TiledSegmenter(base, tile, overlap, iou_merge, include_full,
-                              tile_imgsz, tile_batch, max_side)
+                              tile_imgsz, tile_batch, max_side,
+                              seam_px, rescue_contain)
     return base

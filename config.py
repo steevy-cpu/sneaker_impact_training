@@ -224,6 +224,16 @@ SEGMENT_TILE_BATCH = 8                  # tiles per GPU predict() call. One call
                                         # predictable on the shared GPU (ollama +
                                         # DINOv2 + engine) and the dash website
                                         # never stalls behind a VRAM spike.
+SEGMENT_SEAM_PX = 2                     # a tile detection within this many px of
+                                        # a tile edge (that isn't an image edge)
+                                        # is a truncated partial: quarantined from
+                                        # the main merge so it can't suppress the
+                                        # complete box of the same shoe.
+SEGMENT_RESCUE_CONTAIN = 0.3            # a quarantined partial is rescued (kept)
+                                        # only if its containment vs every kept
+                                        # box is below this -- i.e. no clean box
+                                        # already covers that region. Lower =
+                                        # stricter (fewer sliver crops).
 SEGMENT_TILER = "custom"                # which tiler to use when SEGMENT_TILE>0:
                                         # "custom" = the hand-rolled TiledSegmenter
                                         # (greedy IoU+containment NMS); "sahi" =
