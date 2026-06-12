@@ -173,7 +173,18 @@ SEGMENT_PROMPTS = ["shoe", "sneaker"]   # yoloe text prompts. We detect single
                                         # one record per tied pair. Prompting for
                                         # "pair of shoes" gave messy overlapping
                                         # boxes, so we don't.
-SEGMENT_CONF = 0.25                     # min confidence to keep a segment
+SEGMENT_CONF = 0.10                     # min confidence to keep a segment.
+                                        # Tuned 2026-06-12 against the hand-
+                                        # counted set (eval_tiling.py): 0.25
+                                        # scored 0.655 count-recall; 0.10 with
+                                        # yoloe-11m-seg scores 0.880 with ZERO
+                                        # false positives on empty tables and
+                                        # ~no over-detection -- every error was
+                                        # under-detection, so the threshold was
+                                        # the bottleneck. Below 0.10 phantom
+                                        # boxes appear (0.05 -> 2 FPs on empty
+                                        # tables); don't lower further without
+                                        # re-running the eval.
 SEGMENT_IMGSZ = 1280                    # inference resolution. A whole table of
                                         # many small shoes is the hard case: the
                                         # default 640 downsamples them away. Push
