@@ -204,6 +204,17 @@ SEGMENT_TILE_IMGSZ = 640                # inference resolution for the TILES
                                         # a 512px tile at 1280 upscales 2.5x and
                                         # collapses confidence below SEGMENT_CONF
                                         # -- tiles silently return nothing.
+SEGMENT_MAX_SIDE = 2560                 # cap the photo's long side (px) before
+                                        # tiling. Station shots (1920x1080) pass
+                                        # through untouched; oversized photos
+                                        # (e.g. 8000x6000 phone shots) are
+                                        # downscaled for DETECTION only -- boxes
+                                        # map back to original coords, so crops
+                                        # still come from the full-res photo.
+                                        # Bounds tile count (337 -> ~30 on the
+                                        # 8000x6000 case) and stops shoes bigger
+                                        # than a tile being cut at many seams.
+                                        # 0 = no cap.
 SEGMENT_TILE_BATCH = 8                  # tiles per GPU predict() call. One call
                                         # per tile (the old behavior, = 1) wastes
                                         # most of the time on fixed per-call

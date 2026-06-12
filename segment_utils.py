@@ -221,11 +221,21 @@ class TiledSegmenter(Segmenter):
     fix for dense tables of many small shoes."""
 
     def __init__(self, base, tile, overlap, iou_merge, include_full=True,
-                 tile_imgsz=0, tile_batch=8):
+                 tile_imgsz=0, tile_batch=8, max_side=0):
         self.base = base
         self.tile = tile
         self.overlap = overlap
         self.iou_merge = iou_merge
+        # Cap the DETECTION resolution. Capture sizes vary wildly (1920x1080
+        # station shots vs an 8000x6000 phone photo); SEGMENT_TILE is an
+        # absolute 512px, so on a giant photo a single shoe is BIGGER than a
+        # tile (cut at several seams) and the tile count explodes (337 tiles
+        # observed). Downscaling the long side to max_side before tiling
+        # bounds both: shoes fit in tiles again and tile count stays sane.
+        # Detection happens on the downscaled copy; boxes/polygons are mapped
+        # back to ORIGINAL coords, so callers still crop from the full-res
+        # photo (brand/cloud-ID quality is untouched). 0 = no cap.
+        self.max_side = int(max_side or 0)
         # Tiles are inferred in chunks of this many per predict() call. One
         # call per tile wastes most of the time on fixed per-call overhead
         # (a 1080p photo = 16 calls; the 8000x6000 outlier = 337). Batching
@@ -251,6 +261,29 @@ class TiledSegmenter(Segmenter):
         self.include_full = include_full
 
     def segment(self, image):
+        h, w = image.shape[:2]
+        if not (self.max_side and max(h, w) > self.max_side):
+            return self._segment_work(image)
+        # Detect on a downscaled copy, then map results back to source coords.
+        import cv2                       # lazy: keep module import light
+        scale = self.max_side / float(max(h, w))
+        work = cv2.resize(
+            image,
+            (max(1, int(round(w * scale))), max(1, int(round(h * scale)))),
+            interpolation=cv2.INTER_AREA)
+        print(f"[segment] capped {w}x{h} -> {work.shape[1]}x{work.shape[0]} "
+              f"for detection (max_side={self.max_side})")
+        merged = self._segment_work(work)
+        inv = 1.0 / scale
+        for s in merged:
+            x1, y1, x2, y2 = s.bbox
+            s.bbox = (max(0, int(round(x1 * inv))), max(0, int(round(y1 * inv))),
+                      min(w, int(round(x2 * inv))), min(h, int(round(y2 * inv))))
+            if s.polygon is not None:
+                s.polygon = s.polygon * inv
+        return merged
+
+    def _segment_work(self, image):
         h, w = image.shape[:2]
         windows = _tile_windows(w, h, self.tile, self.overlap)
         raw = []
@@ -486,6 +519,7 @@ def build_segmenter(cfg=None):
         include_full = getattr(cfg, "SEGMENT_TILE_INCLUDE_FULL", True)
         tile_imgsz = getattr(cfg, "SEGMENT_TILE_IMGSZ", 640)
         tile_batch = getattr(cfg, "SEGMENT_TILE_BATCH", 8)
+        max_side = getattr(cfg, "SEGMENT_MAX_SIDE", 0)
         tiler = getattr(cfg, "SEGMENT_TILER", "custom").lower()
         if tiler == "sahi":
             merge = getattr(cfg, "SEGMENT_SAHI_MERGE", "NMS")
@@ -493,5 +527,5 @@ def build_segmenter(cfg=None):
             return SahiTiledSegmenter(base, tile, overlap, iou_merge, merge,
                                       metric, include_full, tile_imgsz)
         return TiledSegmenter(base, tile, overlap, iou_merge, include_full,
-                              tile_imgsz, tile_batch)
+                              tile_imgsz, tile_batch, max_side)
     return base
