@@ -98,6 +98,110 @@ def _crop(image, bbox):
     return crop if crop.size else None
 
 
+def pair_shoes_hybrid(image, segments, embedder,
+                      max_gap_frac=1.2, veto_min=0.25, rescue_min=0.80,
+                      log=None):
+    """Pair shoes by ADJACENCY first, with appearance as a sanity check.
+
+    Measured reality (TBL-20260611-0015): DINOv2 cosine ranks silhouette over
+    identity — two identical white mates scored 0.83 while a *different* gray
+    shoe scored 0.87 against one of them, and true mates in different poses
+    (stacked slip-ons / Converse) scored only 0.41-0.49. No cosine threshold
+    separates mates from strangers. What does separate them: workers place a
+    pair's two shoes touching/stacked on the table.
+
+    Algorithm:
+      1. Geometric matching (closest-first 1:1 within max_gap_frac x size),
+         but VETO a candidate whose crops' cosine < veto_min — that catches
+         a shoe sitting next to an unrelated object/box.
+      2. Visual rescue for leftovers: Hungarian on cosine, accepted only at
+         cos >= rescue_min — pairs split far apart must look near-identical.
+    Falls back to pure geometry when the embedder is unavailable."""
+    n = len(segments)
+    if n < 2:
+        return list(segments)
+    if embedder is None or not getattr(embedder, "ok", False):
+        if log:
+            log("[pair] no embedder -> geometric fallback")
+        return pair_shoes(segments, max_gap_frac)
+
+    import numpy as np
+
+    embs = [None] * n
+    for i, s in enumerate(segments):
+        crop = _crop(image, s.bbox)
+        if crop is None:
+            continue
+        try:
+            embs[i] = embedder.embed(crop)               # L2-normalized vector
+        except Exception:                                # noqa: BLE001 - fail safe
+            embs[i] = None
+
+    def _cos(i, j):
+        if embs[i] is None or embs[j] is None:
+            return None                                  # no veto possible
+        return float(np.dot(embs[i], embs[j]))
+
+    centers = [_center(s.bbox) for s in segments]
+    sizes = [_size(s.bbox) for s in segments]
+
+    # Stage 1: adjacency, closest first, appearance veto.
+    candidates = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            gap = _dist(centers[i], centers[j])
+            if gap <= max_gap_frac * (sizes[i] + sizes[j]) / 2.0:
+                candidates.append((gap, i, j))
+    candidates.sort()
+
+    used, result = set(), []
+    for gap, i, j in candidates:
+        if i in used or j in used:
+            continue
+        cos = _cos(i, j)
+        if cos is not None and cos < veto_min:
+            if log:
+                log(f"[pair] {i}+{j} adjacent but cos={cos:.3f} < {veto_min} -> VETO")
+            continue
+        used.update((i, j))
+        merged = _union(segments[i], segments[j])
+        merged.pair_score = cos
+        result.append(merged)
+        if log:
+            log(f"[pair] {i}+{j} gap={gap:.0f} cos={'n/a' if cos is None else f'{cos:.3f}'} -> PAIR (adjacent)")
+
+    # Stage 2: visual rescue for separated mates — near-identical looks only.
+    left = [i for i in range(n) if i not in used and embs[i] is not None]
+    rescue = []
+    for a in range(len(left)):
+        for b in range(a + 1, len(left)):
+            i, j = left[a], left[b]
+            cos = _cos(i, j)
+            if cos is not None and cos >= rescue_min:
+                rescue.append((cos, i, j))
+    rescue.sort(reverse=True)
+    for cos, i, j in rescue:
+        if i in used or j in used:
+            continue
+        used.update((i, j))
+        merged = _union(segments[i], segments[j])
+        merged.pair_score = cos
+        result.append(merged)
+        if log:
+            log(f"[pair] {i}+{j} cos={cos:.3f} -> PAIR (visual rescue)")
+
+    singles = 0
+    for i in range(n):
+        if i not in used:
+            result.append(segments[i])
+            singles += 1
+    if log:
+        log(f"[pair] hybrid: {n} shoes -> {len(result) - singles} pairs "
+            f"+ {singles} singles (gap<={max_gap_frac}, veto<{veto_min}, "
+            f"rescue>={rescue_min})")
+    return result
+
+
 def pair_shoes_visual(image, segments, embedder,
                       spatial_weight=0.15, min_sim=0.5, log=None):
     """Pair shoes by visual similarity so they need NOT be tied/adjacent.

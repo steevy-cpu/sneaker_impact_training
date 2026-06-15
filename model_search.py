@@ -80,6 +80,9 @@ class OllamaModelIdentifier(ModelIdentifier):
             payload = {
                 "model": self.model, "prompt": prompt, "images": [b64],
                 "stream": False, "format": "json",
+                # Thinking models (qwen3-vl): skip the reasoning preamble.
+                # Ignored by non-thinking models (qwen2.5vl).
+                "think": False,
                 "options": {"temperature": 0},
             }
             req = urllib.request.Request(
@@ -88,7 +91,10 @@ class OllamaModelIdentifier(ModelIdentifier):
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 body = json.loads(resp.read().decode())
 
-            parsed = _parse_json(body.get("response", ""))
+            # ollama + qwen3-vl quirk: with format=json the output can land in
+            # "thinking" while "response" is empty — take whichever parses.
+            parsed = (_parse_json(body.get("response", ""))
+                      or _parse_json(body.get("thinking", "")))
             if not parsed:
                 return "unknown", None, []
             name = (parsed.get("model") or "unknown").strip()
