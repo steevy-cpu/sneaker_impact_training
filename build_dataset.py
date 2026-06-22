@@ -76,29 +76,44 @@ def _split_for(group_id, val_frac, test_frac, seed):
     return "train"
 
 
-def _load_human_keys(db_path):
-    """Set of (source_photo, source_pair) a worker confirmed in Pairs Review.
-    Read-only DB open so we never lock the live site. Empty set on any error."""
-    keys = set()
+def _load_gold(db_path):
+    """Map (source_photo, source_pair) -> the human-confirmed GOLD label, read
+    from the DB's COMPLETED pairs (Quick Label / Pairs Review). source_pair is
+    the crop index parsed from the pair's image_path (…_<N>.jpg), which is the
+    same index the label_data sidecar stores — so gold can OVERRIDE the matching
+    silver (cloud) label, and a confirmed pair that was never auto-exported to
+    label_data still becomes a gold example via its crop on disk.
+
+    Read-only DB open so we never lock the live site. Empty on any error."""
+    gold = {}
     if not os.path.exists(db_path):
-        print(f"[dataset] note: DB not found at {db_path}; no human tier.")
-        return keys
+        print(f"[dataset] note: DB not found at {db_path}; no human gold tier.")
+        return gold
+    root = os.path.dirname(os.path.abspath(db_path))   # dash root (images/ lives here)
     try:
         import sqlite3
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT table_photo_id, id FROM pairs WHERE review_status='COMPLETED' "
-            "AND final_make IS NOT NULL AND final_make NOT IN ('','unknown')"
-        ).fetchall()
-        # pairs.id is like PAIR-...-NNNN; label_data source_pair is the crop index
-        # within the photo. We can only match on table_photo_id reliably, so a
-        # confirmed photo marks ALL its exported crops human-reviewed.
-        for tp, _ in rows:
-            keys.add(tp)
+            "SELECT table_photo_id, image_path, final_make, final_color, final_model "
+            "FROM pairs WHERE review_status='COMPLETED' "
+            "AND final_make IS NOT NULL AND final_make NOT IN ('','unknown')").fetchall()
         conn.close()
     except Exception as exc:                              # noqa: BLE001
-        print(f"[dataset] note: human-tier lookup failed ({exc}); skipping.")
-    return keys
+        print(f"[dataset] note: gold lookup failed ({exc}); skipping.")
+        return gold
+    for r in rows:
+        ip = r["image_path"] or ""
+        try:
+            n = int(os.path.splitext(os.path.basename(ip))[0].split("_")[-1])
+        except (ValueError, IndexError):
+            continue
+        gold[(r["table_photo_id"], n)] = {
+            "make": r["final_make"], "color": r["final_color"] or "unknown",
+            "model": r["final_model"] or "unknown",
+            "disk": os.path.join(root, ip.lstrip("/")) if ip else None,
+        }
+    return gold
 
 
 def main():
@@ -121,10 +136,12 @@ def main():
     if not jsons:
         raise SystemExit(f"[dataset] no label JSONs in {ld}")
 
-    human_photos = _load_human_keys(args.db)
+    gold = _load_gold(args.db)
 
-    # ---- load + normalize ------------------------------------------------
-    records = []
+    # ---- SILVER: label_data sidecars (cloud/local pseudo-labels) ---------
+    # Keyed by (source_photo, source_pair) so human gold can override the exact
+    # crop and dedup is exact.
+    rec = {}
     for jp in jsons:
         try:
             with open(jp) as fh:
@@ -136,27 +153,48 @@ def main():
         if not os.path.exists(img):
             continue
         src_photo = d.get("source_photo") or fn          # group key (fallback: file)
+        src_pair = d.get("source_pair")
         make_disp, make_raw = _canon_make(d.get("make"))
         src = (d.get("prediction_source") or "").lower()
-        quality = ("human" if src_photo in human_photos
-                   else "cloud" if src.startswith("cloud")
-                   else "local" if src == "local" else "unknown")
-        records.append({
-            "filename": fn,
-            "filepath": img,
+        quality = "cloud" if src.startswith("cloud") else "local" if src == "local" else "unknown"
+        rec[(src_photo, src_pair if src_pair is not None else fn)] = {
+            "filename": fn, "filepath": img,
             "split": _split_for(src_photo, args.val_frac, args.test_frac, args.seed),
             "label_quality": quality,
             "color": d.get("detected_color") or "unknown",
-            "make": make_disp,
-            "make_raw": make_raw,
+            "make": make_disp, "make_raw": make_raw,
             "model": d.get("model") or "unknown",
             "make_confidence": d.get("make_confidence"),
             "model_confidence": d.get("model_confidence"),
             "color_confidence": d.get("color_confidence"),
             "prediction_source": d.get("prediction_source") or "",
-            "source_photo": src_photo,
-            "source_pair": d.get("source_pair"),
-        })
+            "source_photo": src_photo, "source_pair": src_pair,
+        }
+
+    # ---- GOLD: human confirmations OVERRIDE the cloud label (or add a new
+    # example for a confirmed pair that was never auto-exported) -----------
+    g_over = g_add = 0
+    for (tp, n), g in gold.items():
+        make_disp, make_raw = _canon_make(g["make"])
+        if (tp, n) in rec:
+            rec[(tp, n)].update(make=make_disp, make_raw=make_raw, color=g["color"],
+                                model=g["model"], label_quality="human",
+                                prediction_source="human", make_confidence=1.0,
+                                model_confidence=None, color_confidence=None)
+            g_over += 1
+        elif g["disk"] and os.path.exists(g["disk"]):
+            rec[(tp, n)] = {
+                "filename": os.path.basename(g["disk"]), "filepath": g["disk"],
+                "split": _split_for(tp, args.val_frac, args.test_frac, args.seed),
+                "label_quality": "human", "color": g["color"], "make": make_disp,
+                "make_raw": make_raw, "model": g["model"], "make_confidence": 1.0,
+                "model_confidence": None, "color_confidence": None,
+                "prediction_source": "human", "source_photo": tp, "source_pair": n,
+            }
+            g_add += 1
+    print(f"[dataset] gold from DB: {g_over} overrode a silver label, "
+          f"{g_add} added (never auto-exported)")
+    records = list(rec.values())
 
     # ---- long-tail handling ----------------------------------------------
     make_counts = Counter(r["make"] for r in records if r["make"] != "unknown")
