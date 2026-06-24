@@ -166,13 +166,30 @@ def main():
     ap.add_argument("--epochs", type=int, default=30)
     ap.add_argument("--aug", choices=["light", "heavy"], default="light")
     ap.add_argument("--bn", action="store_true", help="add BatchNorm (experimental — hurt v1 from scratch)")
-    ap.add_argument("--lr", type=float, default=1e-3)
+    ap.add_argument("--arch", default="scratch",
+                    help="'scratch' = the explainable from-scratch CNN; OR a timm "
+                         "backbone for TRANSFER LEARNING (v3), e.g. resnet18, "
+                         "mobilenetv3_small_100, efficientnet_b0")
+    ap.add_argument("--lr", type=float, default=None,
+                    help="default 1e-3 (scratch) / 3e-4 (transfer fine-tuning)")
     ap.add_argument("--workers", type=int, default=4)
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    # Transfer-learning vs scratch differ in input size, normalization and LR.
+    transfer = args.arch != "scratch"
+    img = 224 if transfer else args.img         # pretrained backbones expect 224px
+    lr = args.lr if args.lr is not None else (3e-4 if transfer else 1e-3)
     classes, by_split, all_rows = load_rows(args.manifest, args.min_count)
     class_to_idx = {c: i for i, c in enumerate(classes)}
+    # Human-gold rows are precious GROUND TRUTH. NEVER train on them — hold them
+    # ALL out as the clean (leak-free) evaluation set; we have plenty of silver
+    # (cloud) labels to train on. Otherwise gold that lands in the train split
+    # inflates the "gold accuracy" into meaningless training accuracy.
+    n_before = len(by_split["train"])
+    by_split["train"] = [r for r in by_split["train"] if r["label_quality"] != "human"]
+    print(f"[train] held {n_before - len(by_split['train'])} human-gold rows OUT of train (eval-only)")
+    print(f"[train] arch={args.arch}  img={img}  lr={lr}")
     print(f"[train] {len(classes)} brands: {classes}")
     print(f"[train] split sizes: " + ", ".join(f"{k}={len(v)}" for k, v in by_split.items()))
 
@@ -180,25 +197,25 @@ def main():
     # different version of each crop (re-cropped, flipped, rotated, recolored),
     # so it learns the brand cue is invariant to those nuisances -> less
     # overfitting (the thing that capped v1). Eval is deterministic (no aug).
-    norm = transforms.Normalize([0.5] * 3, [0.5] * 3)   # scale [0,1] -> ~[-1,1]
-    # Augmentation strength is a flag. "heavy" (re-crop 70%+rotate+jitter) proved
-    # too aggressive for this small from-scratch net on subtle worn-crop brand
-    # cues — the loss stayed flat (couldn't get a foothold). "light" (resize +
-    # gentle flip/jitter) is the safe default; revisit heavier aug once we move to
-    # transfer learning (v3), which has a strong pretrained prior to anchor it.
+    # Pretrained backbones need ImageNet normalization + 224px; the scratch net
+    # uses a simple [-1,1] scaling at 128px. Transfer learning tolerates (likes)
+    # a bit of crop augmentation because the pretrained prior anchors it.
+    if transfer:
+        norm = transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    else:
+        norm = transforms.Normalize([0.5] * 3, [0.5] * 3)
     if args.aug == "heavy":
-        train_steps = [transforms.RandomResizedCrop(args.img, scale=(0.7, 1.0)),
-                       transforms.RandomHorizontalFlip(),
-                       transforms.RandomRotation(15),
-                       transforms.ColorJitter(0.2, 0.2, 0.2)]
-    else:  # light
-        train_steps = [transforms.Resize((args.img, args.img)),
-                       transforms.RandomHorizontalFlip(),
-                       transforms.ColorJitter(0.1, 0.1, 0.1)]
-    train_tfm = transforms.Compose(train_steps + [transforms.ToTensor(), norm])
+        crop = [transforms.RandomResizedCrop(img, scale=(0.7, 1.0)),
+                transforms.RandomRotation(15), transforms.ColorJitter(0.2, 0.2, 0.2)]
+    elif transfer:                                       # mild crop aug
+        crop = [transforms.RandomResizedCrop(img, scale=(0.8, 1.0)),
+                transforms.ColorJitter(0.1, 0.1, 0.1)]
+    else:                                                # scratch: just resize
+        crop = [transforms.Resize((img, img)), transforms.ColorJitter(0.1, 0.1, 0.1)]
+    train_tfm = transforms.Compose(
+        crop + [transforms.RandomHorizontalFlip(), transforms.ToTensor(), norm])
     eval_tfm = transforms.Compose([
-        transforms.Resize((args.img, args.img)),
-        transforms.ToTensor(), norm])
+        transforms.Resize((img, img)), transforms.ToTensor(), norm])
 
     def loader(split, tfm, shuffle):
         return DataLoader(ShoeBrandDataset(by_split[split], class_to_idx, tfm),
@@ -208,7 +225,17 @@ def main():
     val_loader   = loader("val",   eval_tfm,  False)
     test_loader  = loader("test",  eval_tfm,  False)
 
-    model = BrandCNN(len(classes), args.img, use_bn=args.bn).to(device)
+    if transfer:
+        import timm
+        # TRANSFER LEARNING: load a backbone PRE-TRAINED on ImageNet (1.2M images).
+        # It already learned generic visual features (edges -> textures -> shapes);
+        # timm replaces its final classification layer with a fresh Linear -> our
+        # K brands, and we FINE-TUNE the whole net at a low LR so it adapts to
+        # shoes without forgetting that prior. This is why it converges fast and
+        # far higher than a from-scratch net on only ~8k noisy images.
+        model = timm.create_model(args.arch, pretrained=True, num_classes=len(classes)).to(device)
+    else:
+        model = BrandCNN(len(classes), img, use_bn=args.bn).to(device)
 
     # Class weights = inverse frequency, so the loss cares about a rare brand (On)
     # as much as a common one (Brooks) instead of just predicting the majority.
@@ -216,7 +243,7 @@ def main():
     w = torch.tensor([len(by_split["train"]) / (len(classes) * tr_counts[c])
                       for c in classes], dtype=torch.float32, device=device)
     criterion = nn.CrossEntropyLoss(weight=w)        # softmax + negative-log-likelihood
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     # Cosine LR schedule: glide the learning rate from `lr` down to ~0 over all
     # epochs — fast, coarse learning early; gentle fine-settling late. Usually
     # squeezes out a few extra points vs a fixed LR. We call scheduler.step()
@@ -260,7 +287,7 @@ def main():
               open(os.path.join(args.out, "classes.json"), "w"), indent=2)
     json.dump({"classes": classes, "best_val_acc": best_val, "test_acc": test_acc,
                "gold_acc": gold_acc, "gold_n": len(gold_rows), "history": history,
-               "config": vars(args)},
+               "arch": args.arch, "img": img, "lr": lr, "config": vars(args)},
               open(os.path.join(args.out, "metrics.json"), "w"), indent=2)
 
     print(f"\n=== DONE -> {args.out}/ ===")
