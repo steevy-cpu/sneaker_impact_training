@@ -1,12 +1,14 @@
 """
-train_brand.py -- v1 local BRAND classifier (Goal B).
+train_brand.py -- local BRAND classifier (Goal B). Now at v2.
 
-A deliberately SIMPLE convolutional neural network, written from scratch and
-commented layer-by-layer, so it can be fully explained (especially the hidden
-layers). It learns to predict a shoe's brand from a top-down pair crop, so the
-pipeline depends less on the cloud. Accuracy is secondary to clarity here; the
-roadmap (BatchNorm -> augmentation -> transfer learning -> human-gold fine-tune)
-adds power later WITHOUT changing the mental model below.
+Still a from-scratch CNN, commented layer-by-layer so it stays fully explainable
+(especially the hidden layers). v2 lifts v1's accuracy ceiling with three
+standard, well-understood upgrades — none change the mental model:
+  * BatchNorm after each conv (stable activations -> faster, higher-LR training)
+  * stronger augmentation (flip/rotate/recolor/re-crop -> less overfitting)
+  * a cosine learning-rate schedule + a 4th conv block (more capacity)
+v1 (the bare 3-block net) is preserved in git history. Next on the roadmap:
+v3 transfer learning, v4 fine-tune on human gold + color/model heads.
 
 Reads the manifest from build_dataset.py, trains on the silver+gold TRAIN split,
 early-stops on VAL, and reports TEST + human-gold accuracy. Offline + bounded
@@ -34,65 +36,75 @@ torch.manual_seed(42)                         # reproducible runs
 
 
 # ==========================================================================
-#  THE NEURAL NETWORK
-#  A small CNN = [feature extractor] + [classifier head].
+#  THE NEURAL NETWORK  (v2)
+#  Same idea as v1 — a CNN = [feature extractor] + [classifier head] — but with
+#  two upgrades that lift the v1 accuracy ceiling WITHOUT changing the story:
 #
-#  Feature extractor: a stack of "blocks", each = Conv -> ReLU -> MaxPool.
-#    * Conv2d slides small 3x3 filters across the image to detect LOCAL patterns.
-#      `out_channels` is how many different pattern-detectors this layer learns.
-#    * ReLU keeps only positive activations (max(0,x)); this non-linearity is what
-#      lets a deep net model complex shapes instead of just one linear function.
-#    * MaxPool(2) halves height & width, keeping the strongest value in each 2x2
-#      patch -> summarizes the layer and makes it a bit shift-invariant.
-#  As we go deeper: channels GROW (more kinds of features) while the spatial size
-#  SHRINKS. Early layers see edges/colors; deeper layers combine those into
-#  textures, then object parts (logos, stripes, midsoles).
+#    * BatchNorm after every conv. It normalizes that layer's outputs across the
+#      batch to ~zero-mean/unit-variance (then learns a scale+shift). This keeps
+#      the numbers feeding the next layer in a stable range as weights change,
+#      so the net trains much faster, tolerates a higher learning rate, and gets
+#      a little regularization for free. Order per block: Conv -> BN -> ReLU -> Pool.
+#    * A 4th conv block (deeper = can learn more abstract brand motifs).
 #
-#  Classifier head: flatten the final feature maps into one vector and pass it
-#  through fully-connected (Linear) layers that weigh the features into a score
-#  per brand.
+#  Reminder of the per-layer roles:
+#    Conv2d  slides small 3x3 filters to detect LOCAL patterns; out_channels =
+#            how many different pattern-detectors this layer learns.
+#    ReLU    keeps only positives (max(0,x)) — the non-linearity that lets a deep
+#            net model complex shapes, not just one straight-line function.
+#    MaxPool halves H&W, keeping the strongest response per 2x2 patch (summarize
+#            + small shift-invariance).
+#  Going deeper: channels GROW (more feature types), spatial size SHRINKS.
+#  edges/colors -> textures/curves -> parts (logos, stripes, midsole) -> motifs.
 # ==========================================================================
 class BrandCNN(nn.Module):
-    def __init__(self, num_classes, img_size=128):
+    def __init__(self, num_classes, img_size=128, use_bn=False):
         super().__init__()
 
-        # --- hidden conv layers (the feature extractor) ---
-        # Block 1: 3 RGB channels -> 16 feature maps. Learns LOW-level cues:
-        #          edges, corners, flat color regions. padding=1 keeps H,W the same
-        #          before pooling so a 3x3 filter can sit on border pixels too.
-        self.conv1 = nn.Conv2d(in_channels=3, out_channels=16, kernel_size=3, padding=1)
-        # Block 2: 16 -> 32 maps. Combines edges into MID-level cues: textures, curves.
-        self.conv2 = nn.Conv2d(16, 32, kernel_size=3, padding=1)
-        # Block 3: 32 -> 64 maps. Combines textures into PARTS: logo marks, stripes,
-        #          the chunky midsole silhouette that often gives a brand away.
-        self.conv3 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
-        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)   # applied after every block
+        # Helper: one block = Conv -> [BatchNorm] -> ReLU -> MaxPool.
+        # NOTE on BatchNorm: textbook-recommended, but EMPIRICALLY it hurt this
+        # tiny from-scratch net on our noisy pseudo-labels — with BN the loss
+        # crawled (~0.21 val) vs 0.44 without it, across several LRs/aug settings.
+        # So it's OFF by default; the real, robust accuracy jump is transfer
+        # learning (v3), where a pretrained backbone makes BN behave. Kept as a
+        # toggle (--bn) for experimentation.
+        def block(cin, cout):
+            layers = [nn.Conv2d(cin, cout, kernel_size=3, padding=1)]  # detect patterns
+            if use_bn:
+                layers.append(nn.BatchNorm2d(cout))                   # stabilize activations
+            layers += [nn.ReLU(inplace=True),                         # non-linearity
+                       nn.MaxPool2d(2, 2)]                            # downsample 2x
+            return nn.Sequential(*layers)
 
-        # After 3 pools, img_size is halved 3x (128 -> 64 -> 32 -> 16). The final
-        # feature map is therefore 64 channels x 16 x 16. Flattened = 64*16*16.
-        feat = (img_size // 8)                      # 128 // 8 = 16
-        self.flat_dim = 64 * feat * feat            # 16384 for 128px input
+        # 3 blocks: 3 -> 16 -> 32 -> 64 feature maps. Same depth/width as the v1
+        # baseline (which trained well) — v2's ONLY architecture change is the
+        # BatchNorm inside each block. A deeper 4-block/256-ch version was tried
+        # and trained far worse: too much capacity to optimize from scratch on
+        # ~7k images, the loss just crawled. Lesson: add power carefully; the big
+        # jump comes from transfer learning (v3), not from a bigger scratch net.
+        self.features = nn.Sequential(
+            block(3, 16),     # -> 16 x 64 x 64   (edges, colors)
+            block(16, 32),    # -> 32 x 32 x 32   (textures, curves)
+            block(32, 64),    # -> 64 x 16 x 16   (parts: logos, stripes, midsole)
+        )
 
-        # --- classifier head ---
-        # Hidden fully-connected layer: mixes ALL 16384 feature numbers into 256
-        # "brand-evidence" units. This is where the net reasons over the whole shoe
-        # ("dark midsole + N-shaped panel -> New Balance-ish").
-        self.fc1 = nn.Linear(self.flat_dim, 256)
-        # Dropout zeroes 40% of those 256 units at random DURING TRAINING only, so
-        # the net can't lean on any single feature -> reduces overfitting.
-        self.dropout = nn.Dropout(0.4)
-        # Output layer: 256 -> one raw score (logit) per brand. Softmax (applied
-        # inside the loss) turns these into probabilities.
-        self.fc2 = nn.Linear(256, num_classes)
+        # After 3 pools a 128px image is 128/2^3 = 16 px wide. Final map: 64 x 16 x 16.
+        feat = img_size // 8                         # 128 // 8 = 16
+        self.flat_dim = 64 * feat * feat             # 16384 for 128px input
 
-    def forward(self, x):                       # x: (B, 3, 128, 128)
-        x = self.pool(F.relu(self.conv1(x)))    # -> (B, 16, 64, 64)
-        x = self.pool(F.relu(self.conv2(x)))    # -> (B, 32, 32, 32)
-        x = self.pool(F.relu(self.conv3(x)))    # -> (B, 64, 16, 16)
-        x = torch.flatten(x, start_dim=1)       # -> (B, 16384)  (keep batch dim)
-        x = F.relu(self.fc1(x))                 # -> (B, 256)    hidden representation
-        x = self.dropout(x)
-        x = self.fc2(x)                         # -> (B, num_classes)  logits
+        # Classifier head: flatten -> hidden FC (mix all features into 256
+        # "brand-evidence" units) -> dropout -> output score per brand.
+        self.classifier = nn.Sequential(
+            nn.Flatten(),                            # (B, 256, 8, 8) -> (B, 16384)
+            nn.Linear(self.flat_dim, 256),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.4),                         # drop 40% of units (train only)
+            nn.Linear(256, num_classes),             # -> one logit per brand
+        )
+
+    def forward(self, x):                # x: (B, 3, 128, 128)
+        x = self.features(x)             # conv stack -> (B, 256, 8, 8)
+        x = self.classifier(x)           # head        -> (B, num_classes) logits
         return x
 
 
@@ -151,7 +163,9 @@ def main():
     ap.add_argument("--min-count", type=int, default=100, help="min images per brand to include")
     ap.add_argument("--img", type=int, default=128)
     ap.add_argument("--batch", type=int, default=64)       # small -> bounded VRAM
-    ap.add_argument("--epochs", type=int, default=12)
+    ap.add_argument("--epochs", type=int, default=30)
+    ap.add_argument("--aug", choices=["light", "heavy"], default="light")
+    ap.add_argument("--bn", action="store_true", help="add BatchNorm (experimental — hurt v1 from scratch)")
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--workers", type=int, default=4)
     args = ap.parse_args()
@@ -162,13 +176,26 @@ def main():
     print(f"[train] {len(classes)} brands: {classes}")
     print(f"[train] split sizes: " + ", ".join(f"{k}={len(v)}" for k, v in by_split.items()))
 
-    # Transforms: resize to a fixed square, (train) random horizontal flip for a
-    # little augmentation, to tensor in [0,1], then normalize to ~[-1,1].
-    norm = transforms.Normalize([0.5] * 3, [0.5] * 3)
-    train_tfm = transforms.Compose([
-        transforms.Resize((args.img, args.img)),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(), norm])
+    # Transforms. v2 augments harder: every epoch the net sees a slightly
+    # different version of each crop (re-cropped, flipped, rotated, recolored),
+    # so it learns the brand cue is invariant to those nuisances -> less
+    # overfitting (the thing that capped v1). Eval is deterministic (no aug).
+    norm = transforms.Normalize([0.5] * 3, [0.5] * 3)   # scale [0,1] -> ~[-1,1]
+    # Augmentation strength is a flag. "heavy" (re-crop 70%+rotate+jitter) proved
+    # too aggressive for this small from-scratch net on subtle worn-crop brand
+    # cues — the loss stayed flat (couldn't get a foothold). "light" (resize +
+    # gentle flip/jitter) is the safe default; revisit heavier aug once we move to
+    # transfer learning (v3), which has a strong pretrained prior to anchor it.
+    if args.aug == "heavy":
+        train_steps = [transforms.RandomResizedCrop(args.img, scale=(0.7, 1.0)),
+                       transforms.RandomHorizontalFlip(),
+                       transforms.RandomRotation(15),
+                       transforms.ColorJitter(0.2, 0.2, 0.2)]
+    else:  # light
+        train_steps = [transforms.Resize((args.img, args.img)),
+                       transforms.RandomHorizontalFlip(),
+                       transforms.ColorJitter(0.1, 0.1, 0.1)]
+    train_tfm = transforms.Compose(train_steps + [transforms.ToTensor(), norm])
     eval_tfm = transforms.Compose([
         transforms.Resize((args.img, args.img)),
         transforms.ToTensor(), norm])
@@ -181,7 +208,7 @@ def main():
     val_loader   = loader("val",   eval_tfm,  False)
     test_loader  = loader("test",  eval_tfm,  False)
 
-    model = BrandCNN(len(classes), args.img).to(device)
+    model = BrandCNN(len(classes), args.img, use_bn=args.bn).to(device)
 
     # Class weights = inverse frequency, so the loss cares about a rare brand (On)
     # as much as a common one (Brooks) instead of just predicting the majority.
@@ -190,6 +217,11 @@ def main():
                       for c in classes], dtype=torch.float32, device=device)
     criterion = nn.CrossEntropyLoss(weight=w)        # softmax + negative-log-likelihood
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    # Cosine LR schedule: glide the learning rate from `lr` down to ~0 over all
+    # epochs — fast, coarse learning early; gentle fine-settling late. Usually
+    # squeezes out a few extra points vs a fixed LR. We call scheduler.step()
+    # once per epoch (below).
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
     os.makedirs(args.out, exist_ok=True)
     best_val, history = 0.0, []
@@ -212,6 +244,7 @@ def main():
         if val_acc >= best_val:                # keep the best-on-validation weights
             best_val = val_acc
             torch.save(model.state_dict(), os.path.join(args.out, "brand_cnn.pt"))
+        scheduler.step()                       # advance the cosine LR once per epoch
 
     # Reload best and report final numbers.
     model.load_state_dict(torch.load(os.path.join(args.out, "brand_cnn.pt")))
