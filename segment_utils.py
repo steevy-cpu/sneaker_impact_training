@@ -47,6 +47,17 @@ def _resolve_device():
         return "cpu"
 
 
+def _empty_cuda_cache():
+    """Best-effort: hand freed VRAM back to the driver so a co-resident process
+    (the ollama VLM) can use it. Never raises."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:                                 # noqa: BLE001 - best effort
+        pass
+
+
 class Segmenter:
     """Common interface. Subclasses implement segment(image) -> list[Segment]."""
 
@@ -58,6 +69,12 @@ class Segmenter:
         Default = sequential loop, so every backend works unchanged; backends
         that support true batching (YOLOE) override this for speed."""
         return [self.segment(im) for im in images]
+
+    def release(self):
+        """Drop model weights off the GPU once segmentation is done, so the
+        per-pair VLM step isn't starved of VRAM. Default = no-op; backends that
+        hold a model override it. Safe to call once, after the last segment()."""
+        return None
 
 
 class YoloeSegmenter(Segmenter):
@@ -124,6 +141,10 @@ class YoloeSegmenter(Segmenter):
             return [self.segment(im) for im in images]
         return [_segments_from_one(r) for r in results]
 
+    def release(self):
+        self.model = None
+        _empty_cuda_cache()
+
 
 class Sam2Segmenter(Segmenter):
     """Segment Anything 2 (Apache-2.0) -- class-agnostic auto-segmentation.
@@ -158,6 +179,10 @@ class Sam2Segmenter(Segmenter):
         # _segments_from_result reads boxes when present and falls back to mask
         # bounding boxes otherwise.
         return _segments_from_result(results, default_label="object")
+
+    def release(self):
+        self.model = None
+        _empty_cuda_cache()
 
 
 def _iou(a, b):
@@ -359,6 +384,9 @@ class TiledSegmenter(Segmenter):
             if old is not None:
                 self.base.imgsz = old
 
+    def release(self):
+        self.base.release()
+
 
 class SahiTiledSegmenter(Segmenter):
     """SAHI-powered tiling: slice with SAHI's geometry (`get_slice_bboxes`) and
@@ -464,6 +492,9 @@ class SahiTiledSegmenter(Segmenter):
               f"{len(windows)} tiles + {full_n} full -> {len(segs)} raw -> "
               f"{len(out)} merged")
         return out
+
+    def release(self):
+        self.base.release()
 
 
 def _segments_from_result(results, default_label="shoe"):
@@ -616,6 +647,14 @@ class Sam2GateSegmenter(Segmenter):
         print(f"[segment] SAM2+gate: {len(boxes)} masks -> {len(kept)} shoes")
         return [Segment(b, 1.0, "shoe", None) for b in kept]
 
+    def release(self):
+        # SAM2 (~5GB) + the gate must come off the GPU before the per-pair VLM
+        # loop, or the resident ollama model is evicted and every model-ID call
+        # times out. This is the whole reason release() exists.
+        self.sam = None
+        self.gate = None
+        _empty_cuda_cache()
+
 
 class EscalatingSegmenter(Segmenter):
     """Run a fast PRIMARY segmenter (the YOLOE tiler) every time; when its result
@@ -674,6 +713,11 @@ class EscalatingSegmenter(Segmenter):
         print(f"[segment] escalated but kept YOLOE ({len(primary)} >= "
               f"{len(alt)})")
         return primary
+
+    def release(self):
+        self.primary.release()
+        if self._fallback is not None:
+            self._fallback.release()
 
 
 def build_segmenter(cfg=None):
