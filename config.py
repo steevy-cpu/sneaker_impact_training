@@ -258,6 +258,36 @@ SEGMENT_SAHI_MERGE = "NMS"              # sahi tiler only: "NMS" (suppress, keep
 SEGMENT_SAHI_METRIC = "IOS"            # sahi tiler only: overlap metric for the
                                         # merge -- "IOS" (intersection-over-smaller,
                                         # good for tile-seam partials) or "IOU".
+
+# ---- SAM2 escalation hybrid (research 2026-06-27, OFF by default) -----------
+# On crowded / low-contrast tables YOLOE under-detects and produces sliver crops.
+# SAM2-everything + a learned shoe/not-shoe gate beats it there (validated: pairs
+# +20%, slivers 5->0, recall 0.93 vs 0.88) but is ~56% slower, so it is run only
+# as an ESCALATION: the YOLOE tiler runs every time; when its result looks weak
+# we additionally run SAM2+gate and keep whichever found MORE shoes (never worse
+# than YOLOE alone). Entirely additive -- set SEGMENT_ESCALATE_SAM2=False (or env
+# ENGINE_SEGMENT_ESCALATE=0) and the pipeline is byte-identical to before.
+SEGMENT_ESCALATE_SAM2 = False          # master switch for the SAM2 escalation.
+SEGMENT_ESCALATE_MODE = "weak"          # when to escalate: "weak" = only when the
+                                        # YOLOE pass looks weak (see thresholds
+                                        # below); "always" = on every photo (max
+                                        # effect, for evaluation -- ignores cost).
+SEGMENT_ESCALATE_MAX_SHOES = 28         # "weak": escalate if YOLOE kept <= this
+                                        # many shoes (crowded tables it under-counts).
+SEGMENT_ESCALATE_MIN_SLIVERS = 1        # "weak": OR escalate if YOLOE produced at
+                                        # least this many sliver boxes (seam-cut
+                                        # partials -- the exact artifact SAM2 fixes).
+SEGMENT_ESCALATE_GATE = "dataset/gate_clf/gate_cnn.pt"   # learned shoe/not-shoe
+                                        # gate weights (resnet18). Missing file =>
+                                        # escalation self-disables (logs, stays YOLOE).
+SEGMENT_ESCALATE_SAM_MODEL = "sam2_b.pt"  # SAM2 weights (Apache-2.0).
+SEGMENT_ESCALATE_SAM_MAX = 1536        # downscale SAM2 input long side (px) before
+                                        # everything-mode, else it OOMs on huge
+                                        # photos; boxes are mapped back to source.
+SEGMENT_ESCALATE_AF_LO = 0.004         # SAM mask size filter: min area fraction,
+SEGMENT_ESCALATE_AF_HI = 0.12          #   max area fraction,
+SEGMENT_ESCALATE_AR_MAX = 4.5          #   and max aspect ratio (drop junk masks).
+
 SEGMENT_CROP_PAD = 0.04                 # pad each crop by this fraction of bbox
                                         # size on every side (a little context
                                         # helps the make/model step). 0 = tight.

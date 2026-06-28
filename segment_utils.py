@@ -503,6 +503,179 @@ def _segments_from_one(r, default_label="shoe"):
     return segs
 
 
+def _is_sliver(seg, w, h):
+    """A degenerate detection: a tiny crop or an extreme-aspect-ratio one (the
+    seam-cut partials YOLOE leaves on crowded tables). Same rule the SAM2
+    validation used; only a TRIGGER signal here, not a filter."""
+    x1, y1, x2, y2 = seg.bbox
+    bw, bh = x2 - x1, y2 - y1
+    if bw <= 0 or bh <= 0:
+        return True
+    return (bw * bh) / float(w * h) < 0.004 or max(bw, bh) / float(min(bw, bh)) > 6.0
+
+
+class Sam2GateSegmenter(Segmenter):
+    """SAM2-everything + a learned shoe/not-shoe gate.
+
+    SAM2 (Apache-2.0) returns a class-agnostic mask for every object; a size
+    filter drops obvious junk, then a small resnet18 gate (trained on our own
+    table photos: in-bbox masks = shoe, empty-zone masks = junk) keeps only the
+    masks it calls 'shoe'. Higher recall + cleaner instance masks than the YOLOE
+    tiler on crowded / low-contrast tables, with the background junk removed.
+    Validated 2026-06-27 (see validate_gate.py). All heavy imports are lazy; a
+    load/inference error logs and returns [] so the caller keeps running.
+    """
+
+    def __init__(self, sam_model_path, gate_path, device,
+                 sam_max=1536, af_lo=0.004, af_hi=0.12, ar_max=4.5):
+        self.device = device
+        self.sam_max = int(sam_max)
+        self.af_lo, self.af_hi, self.ar_max = af_lo, af_hi, ar_max
+        self.sam = None
+        self.gate = None
+        self._tf = None
+        try:
+            from ultralytics import SAM                # type: ignore
+            self.sam = SAM(sam_model_path)
+            import torch, timm                          # type: ignore
+            from torchvision import transforms          # type: ignore
+            self.gate = timm.create_model(
+                "resnet18", pretrained=False, num_classes=2).to(device).eval()
+            self.gate.load_state_dict(torch.load(gate_path, map_location=device))
+            self._tf = transforms.Compose([
+                transforms.ToPILImage(), transforms.Resize((224, 224)),
+                transforms.ToTensor(),
+                transforms.Normalize([0.485, 0.456, 0.406],
+                                     [0.229, 0.224, 0.225])])
+            print(f"[segment] SAM2+gate ready: {sam_model_path} + {gate_path} "
+                  f"on {device}")
+        except Exception as exc:                        # noqa: BLE001 - fail safe
+            print(f"[segment] ERROR loading SAM2+gate ({exc}); escalation off.")
+            self.sam = None
+
+    @property
+    def ready(self):
+        return self.sam is not None and self.gate is not None
+
+    def _sam_masks(self, image):
+        """SAM2-everything on a size-capped copy; size-filtered bboxes mapped
+        back to original coords."""
+        import cv2
+        h, w = image.shape[:2]
+        s = self.sam_max / float(max(h, w)) if max(h, w) > self.sam_max else 1.0
+        img_s = cv2.resize(image, (int(w * s), int(h * s))) if s != 1.0 else image
+        inv = 1.0 / s
+        try:
+            r = self.sam(img_s, verbose=False, device=self.device)[0]
+        except Exception as exc:                        # noqa: BLE001 - fail safe
+            print(f"[segment] SAM2 inference failed: {exc}")
+            return []
+        out = []
+        if getattr(r, "masks", None) is None:
+            return out
+        for p in r.masks.xy:
+            if len(p) < 3:
+                continue
+            x1, y1 = int(p[:, 0].min() * inv), int(p[:, 1].min() * inv)
+            x2, y2 = int(p[:, 0].max() * inv), int(p[:, 1].max() * inv)
+            bw, bh = x2 - x1, y2 - y1
+            if bw <= 0 or bh <= 0:
+                continue
+            af = (bw * bh) / float(w * h)
+            ar = max(bw, bh) / float(min(bw, bh))
+            if af < self.af_lo or af > self.af_hi or ar > self.ar_max:
+                continue
+            out.append((x1, y1, x2, y2))
+        return out
+
+    def _gate_keep(self, image, boxes):
+        """Keep only boxes the gate classifies as 'shoe' (class 1)."""
+        import torch
+        if not boxes:
+            return []
+        crops = []
+        for (x1, y1, x2, y2) in boxes:
+            crop = image[max(0, y1):y2, max(0, x1):x2]
+            if crop.size == 0:
+                crops.append(None)
+                continue
+            crops.append(self._tf(crop))
+        idx = [i for i, c in enumerate(crops) if c is not None]
+        if not idx:
+            return []
+        with torch.no_grad():
+            x = torch.stack([crops[i] for i in idx]).to(self.device)
+            pred = self.gate(x).argmax(1).cpu().tolist()
+        return [boxes[i] for i, p in zip(idx, pred) if p == 1]
+
+    def segment(self, image):
+        if not self.ready:
+            return []
+        boxes = self._sam_masks(image)
+        kept = self._gate_keep(image, boxes)
+        print(f"[segment] SAM2+gate: {len(boxes)} masks -> {len(kept)} shoes")
+        return [Segment(b, 1.0, "shoe", None) for b in kept]
+
+
+class EscalatingSegmenter(Segmenter):
+    """Run a fast PRIMARY segmenter (the YOLOE tiler) every time; when its result
+    looks weak, ALSO run a heavier FALLBACK (SAM2+gate) and keep whichever found
+    more shoes. Recall never drops below the primary, and the expensive path runs
+    only when it is likely to help -- so the live site's cost is bounded.
+
+    Fully additive: with SEGMENT_ESCALATE_SAM2=False this wrapper isn't built at
+    all (build_segmenter returns the primary directly), so it is a clean off-switch.
+    """
+
+    def __init__(self, primary, fallback_builder, mode="weak",
+                 max_shoes=28, min_slivers=1):
+        self.primary = primary
+        self._build_fallback = fallback_builder   # lazy: built on first escalation
+        self._fallback = None
+        self._fallback_tried = False
+        self.mode = (mode or "weak").lower()
+        self.max_shoes = int(max_shoes)
+        self.min_slivers = int(min_slivers)
+
+    def _should_escalate(self, segs, image):
+        if self.mode == "always":
+            return True
+        if len(segs) <= self.max_shoes:
+            return True
+        h, w = image.shape[:2]
+        slivers = sum(1 for s in segs if _is_sliver(s, w, h))
+        return slivers >= self.min_slivers
+
+    def _fallback_seg(self):
+        """Build the SAM2+gate segmenter once, on first need (keeps SAM2/gate off
+        the GPU entirely until an escalation actually fires)."""
+        if not self._fallback_tried:
+            self._fallback_tried = True
+            try:
+                fb = self._build_fallback()
+                self._fallback = fb if (fb is not None and fb.ready) else None
+            except Exception as exc:                    # noqa: BLE001 - fail safe
+                print(f"[segment] fallback build failed ({exc}); staying primary.")
+                self._fallback = None
+        return self._fallback
+
+    def segment(self, image):
+        primary = self.primary.segment(image)
+        if not self._should_escalate(primary, image):
+            return primary
+        fb = self._fallback_seg()
+        if fb is None:
+            return primary
+        alt = fb.segment(image)
+        if len(alt) > len(primary):
+            print(f"[segment] ESCALATED: SAM2+gate {len(alt)} > YOLOE "
+                  f"{len(primary)} -> using SAM2+gate")
+            return alt
+        print(f"[segment] escalated but kept YOLOE ({len(primary)} >= "
+              f"{len(alt)})")
+        return primary
+
+
 def build_segmenter(cfg=None):
     """Construct the configured segmenter. Returns a Segmenter (whose segment()
     yields [] if the model failed to load -- never raises)."""
@@ -534,9 +707,34 @@ def build_segmenter(cfg=None):
         if tiler == "sahi":
             merge = getattr(cfg, "SEGMENT_SAHI_MERGE", "NMS")
             metric = getattr(cfg, "SEGMENT_SAHI_METRIC", "IOS")
-            return SahiTiledSegmenter(base, tile, overlap, iou_merge, merge,
-                                      metric, include_full, tile_imgsz)
-        return TiledSegmenter(base, tile, overlap, iou_merge, include_full,
-                              tile_imgsz, tile_batch, max_side,
-                              seam_px, rescue_contain)
-    return base
+            primary = SahiTiledSegmenter(base, tile, overlap, iou_merge, merge,
+                                         metric, include_full, tile_imgsz)
+        else:
+            primary = TiledSegmenter(base, tile, overlap, iou_merge, include_full,
+                                     tile_imgsz, tile_batch, max_side,
+                                     seam_px, rescue_contain)
+    else:
+        primary = base
+
+    # Optional SAM2 escalation hybrid (off by default -- see config). Wrap the
+    # primary so it runs every time and SAM2+gate only kicks in on weak results.
+    # When off, the primary is returned untouched (zero behavior change).
+    if getattr(cfg, "SEGMENT_ESCALATE_SAM2", False) and backend != "sam2":
+        def _make_fallback():
+            return Sam2GateSegmenter(
+                getattr(cfg, "SEGMENT_ESCALATE_SAM_MODEL", "sam2_b.pt"),
+                getattr(cfg, "SEGMENT_ESCALATE_GATE",
+                        "dataset/gate_clf/gate_cnn.pt"),
+                device,
+                sam_max=getattr(cfg, "SEGMENT_ESCALATE_SAM_MAX", 1536),
+                af_lo=getattr(cfg, "SEGMENT_ESCALATE_AF_LO", 0.004),
+                af_hi=getattr(cfg, "SEGMENT_ESCALATE_AF_HI", 0.12),
+                ar_max=getattr(cfg, "SEGMENT_ESCALATE_AR_MAX", 4.5))
+        print("[segment] SAM2 escalation ENABLED (mode="
+              f"{getattr(cfg, 'SEGMENT_ESCALATE_MODE', 'weak')})")
+        return EscalatingSegmenter(
+            primary, _make_fallback,
+            mode=getattr(cfg, "SEGMENT_ESCALATE_MODE", "weak"),
+            max_shoes=getattr(cfg, "SEGMENT_ESCALATE_MAX_SHOES", 28),
+            min_slivers=getattr(cfg, "SEGMENT_ESCALATE_MIN_SLIVERS", 1))
+    return primary
