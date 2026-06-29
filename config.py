@@ -363,6 +363,13 @@ SEGMENT_WHITEN_COLOR = 205             # background grayscale value (0-255). NOT
                                         # silhouette). ~205 mid-gray keeps white
                                         # shoes' edges; raise toward 255 for a
                                         # whiter look, lower for more contrast.
+SEGMENT_CROP_MASK_SAM2 = True          # refine each crop's whitening mask with
+                                        # SAM2 box-prompt (clean, tight masks)
+                                        # instead of the loose YOLOE detection
+                                        # mask. Adds ~4-6s/photo (box-prompt, far
+                                        # cheaper than SAM2 everything-mode) and
+                                        # makes whitened crops clean on EVERY
+                                        # table. Only runs when WHITEN_CROP is on.
 
 # Where whole-table photos are read from and where per-pair crops are written.
 TABLE_INPUT_DIR = "sneaker_impact/table_photos"   # full-table photos land here

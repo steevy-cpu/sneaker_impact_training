@@ -660,6 +660,67 @@ class Sam2GateSegmenter(Segmenter):
         _empty_cuda_cache()
 
 
+class Sam2BoxMasker:
+    """Refine crop masks with SAM2 in BOX-PROMPT mode.
+
+    Detection (YOLOE tiler) is fast but its segmentation masks are loose -- they
+    don't hug the shoe, so a whitened crop still shows the table / a neighbor.
+    This decouples the two jobs: keep YOLOE for detection/recall, then ask SAM2
+    for ONE clean mask per final shoe box. Box-prompt is far cheaper than SAM2's
+    everything-mode (the image encoder runs once; each box decode is tiny), so
+    every table gets pristine crop masks for a few seconds, not just the ones
+    that escalate. All heavy imports lazy; load/inference errors fail safe.
+    """
+
+    def __init__(self, sam_model_path, device, sam_max=1536):
+        self.device = device
+        self.sam_max = int(sam_max)
+        self.sam = None
+        try:
+            from ultralytics import SAM                # type: ignore
+            self.sam = SAM(sam_model_path)
+            print(f"[segment] SAM2 box-masker ready: {sam_model_path} on {device}")
+        except Exception as exc:                        # noqa: BLE001 - fail safe
+            print(f"[segment] ERROR loading SAM2 box-masker ({exc}); "
+                  "keeping detection masks.")
+            self.sam = None
+
+    @property
+    def ready(self):
+        return self.sam is not None
+
+    def mask_boxes(self, image, boxes):
+        """Return one clean polygon (Nx2, source coords) per input box, aligned
+        by index; None where SAM2 gave no usable mask. `boxes` are (x1,y1,x2,y2)
+        in source coords."""
+        if not self.ready or not boxes:
+            return [None] * len(boxes)
+        import cv2
+        h, w = image.shape[:2]
+        s = self.sam_max / float(max(h, w)) if max(h, w) > self.sam_max else 1.0
+        img_s = cv2.resize(image, (int(w * s), int(h * s))) if s != 1.0 else image
+        inv = 1.0 / s
+        scaled = [[b[0] * s, b[1] * s, b[2] * s, b[3] * s] for b in boxes]
+        try:
+            r = self.sam(img_s, bboxes=scaled, verbose=False, device=self.device)[0]
+        except Exception as exc:                        # noqa: BLE001 - fail safe
+            print(f"[segment] SAM2 box-prompt failed: {exc}")
+            return [None] * len(boxes)
+        out = [None] * len(boxes)
+        if getattr(r, "masks", None) is None:
+            return out
+        polys = r.masks.xy
+        for i in range(min(len(boxes), len(polys))):
+            p = polys[i]
+            if p is not None and len(p) >= 3:
+                out[i] = p * inv                        # back to source coords
+        return out
+
+    def release(self):
+        self.sam = None
+        _empty_cuda_cache()
+
+
 class EscalatingSegmenter(Segmenter):
     """Run a fast PRIMARY segmenter (the YOLOE tiler) every time; when its result
     looks weak, ALSO run a heavier FALLBACK (SAM2+gate) and keep whichever found
