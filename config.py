@@ -370,6 +370,13 @@ SEGMENT_CROP_MASK_SAM2 = True          # refine each crop's whitening mask with
                                         # cheaper than SAM2 everything-mode) and
                                         # makes whitened crops clean on EVERY
                                         # table. Only runs when WHITEN_CROP is on.
+SEGMENT_WHITEN_TIGHTEN = True          # after whitening, re-crop to the shoe
+                                        # mask's bounding box so the shoes fill
+                                        # the frame (no big gray margin); also
+                                        # drops a neighbor that fell in the loose
+                                        # union box. Off = keep the padded bbox.
+SEGMENT_WHITEN_TIGHTEN_MARGIN = 10     # px of breathing room around the mask
+                                        # when tightening.
 
 # Where whole-table photos are read from and where per-pair crops are written.
 TABLE_INPUT_DIR = "sneaker_impact/table_photos"   # full-table photos land here
