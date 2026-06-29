@@ -616,16 +616,20 @@ class Sam2GateSegmenter(Segmenter):
             ar = max(bw, bh) / float(min(bw, bh))
             if af < self.af_lo or af > self.af_hi or ar > self.ar_max:
                 continue
-            out.append((x1, y1, x2, y2))
+            # Keep the SAM2 mask polygon (mapped to source coords) -- it's what
+            # lets the crop step white-out the background to a clean shoe-only
+            # image. SAM2's masks are tight, so this looks great.
+            out.append(((x1, y1, x2, y2), p * inv))
         return out
 
-    def _gate_keep(self, image, boxes):
-        """Keep only boxes the gate classifies as 'shoe' (class 1)."""
+    def _gate_keep(self, image, items):
+        """Keep only masks the gate classifies as 'shoe' (class 1)."""
         import torch
-        if not boxes:
+        if not items:
             return []
         crops = []
-        for (x1, y1, x2, y2) in boxes:
+        for (bbox, _poly) in items:
+            x1, y1, x2, y2 = bbox
             crop = image[max(0, y1):y2, max(0, x1):x2]
             if crop.size == 0:
                 crops.append(None)
@@ -637,15 +641,15 @@ class Sam2GateSegmenter(Segmenter):
         with torch.no_grad():
             x = torch.stack([crops[i] for i in idx]).to(self.device)
             pred = self.gate(x).argmax(1).cpu().tolist()
-        return [boxes[i] for i, p in zip(idx, pred) if p == 1]
+        return [items[i] for i, p in zip(idx, pred) if p == 1]
 
     def segment(self, image):
         if not self.ready:
             return []
-        boxes = self._sam_masks(image)
-        kept = self._gate_keep(image, boxes)
-        print(f"[segment] SAM2+gate: {len(boxes)} masks -> {len(kept)} shoes")
-        return [Segment(b, 1.0, "shoe", None) for b in kept]
+        items = self._sam_masks(image)
+        kept = self._gate_keep(image, items)
+        print(f"[segment] SAM2+gate: {len(items)} masks -> {len(kept)} shoes")
+        return [Segment(bbox, 1.0, "shoe", poly) for (bbox, poly) in kept]
 
     def release(self):
         # SAM2 (~5GB) + the gate must come off the GPU before the per-pair VLM

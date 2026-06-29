@@ -43,9 +43,14 @@ def _union(seg_a, seg_b):
     ax1, ay1, ax2, ay2 = seg_a.bbox
     bx1, by1, bx2, by2 = seg_b.bbox
     bbox = (min(ax1, bx1), min(ay1, by1), max(ax2, bx2), max(ay2, by2))
-    # Polygon is dropped for pairs: two separate shoe contours don't combine into
-    # one meaningful polygon, and the union bbox is what we crop.
-    return Segment(bbox, max(seg_a.score, seg_b.score), "pair", polygon=None)
+    # The single combined polygon is dropped (two contours don't merge into one),
+    # but keep BOTH members' polygons + boxes so the crop step can white-out the
+    # background to just these two shoes -- even if a 3rd shoe sits in the union
+    # box, it gets masked away. None entries are fine (whitening just skips them).
+    merged = Segment(bbox, max(seg_a.score, seg_b.score), "pair", polygon=None)
+    merged.member_polys = [seg_a.polygon, seg_b.polygon]
+    merged.member_boxes = [seg_a.bbox, seg_b.bbox]
+    return merged
 
 
 def pair_shoes(segments, max_gap_frac=1.2):
@@ -100,7 +105,7 @@ def _crop(image, bbox):
 
 def pair_shoes_hybrid(image, segments, embedder,
                       max_gap_frac=1.2, veto_min=0.25, rescue_min=0.80,
-                      log=None):
+                      max_dist_frac=0.20, log=None):
     """Pair shoes by ADJACENCY first, with appearance as a sanity check.
 
     Measured reality (TBL-20260611-0015): DINOv2 cosine ranks silhouette over
@@ -171,11 +176,17 @@ def pair_shoes_hybrid(image, segments, embedder,
             log(f"[pair] {i}+{j} gap={gap:.0f} cos={'n/a' if cos is None else f'{cos:.3f}'} -> PAIR (adjacent)")
 
     # Stage 2: visual rescue for separated mates — near-identical looks only.
+    # Capped by distance: without it, two look-alike shoes on opposite ends of
+    # the table get "rescued" into one pair whose union crop spans the whole
+    # table (and is almost surely a wrong match). max_dist_frac<=0 disables it.
+    diag = (image.shape[0] ** 2 + image.shape[1] ** 2) ** 0.5 or 1.0
     left = [i for i in range(n) if i not in used and embs[i] is not None]
     rescue = []
     for a in range(len(left)):
         for b in range(a + 1, len(left)):
             i, j = left[a], left[b]
+            if max_dist_frac > 0 and _dist(centers[i], centers[j]) / diag > max_dist_frac:
+                continue
             cos = _cos(i, j)
             if cos is not None and cos >= rescue_min:
                 rescue.append((cos, i, j))
@@ -203,7 +214,8 @@ def pair_shoes_hybrid(image, segments, embedder,
 
 
 def pair_shoes_visual(image, segments, embedder,
-                      spatial_weight=0.15, min_sim=0.5, log=None):
+                      spatial_weight=0.15, min_sim=0.5, max_dist_frac=0.20,
+                      log=None):
     """Pair shoes by visual similarity so they need NOT be tied/adjacent.
 
     For each detected shoe we embed its crop, then find the globally-best 1:1
@@ -212,8 +224,15 @@ def pair_shoes_visual(image, segments, embedder,
         score(i, j) = cosine(emb_i, emb_j) - spatial_weight * spatial_dist_norm
 
     where spatial_dist_norm is the center distance over the image diagonal (so a
-    small, soft tiebreak). A pair is accepted only if score >= min_sim; otherwise
-    both shoes fall through to singles. Shoes that can't be embedded are singles.
+    small, soft tiebreak). A pair is accepted only if score >= min_sim AND the two
+    shoes' centers are within max_dist_frac of the image diagonal; otherwise both
+    shoes fall through to singles. Shoes that can't be embedded are singles.
+
+    The distance cap is essential: the crop of a pair is the UNION bbox of its two
+    shoes, so two visually-similar shoes matched across the table produce a giant
+    crop that swallows every shoe between them (and is almost certainly a wrong
+    match anyway -- real mates are placed near each other even when not tied).
+    max_dist_frac<=0 disables the cap (old behavior).
 
     Degrades safely to the geometric pair_shoes() if the embedder is missing or
     fewer than two shoes embed. Returns the same shape as pair_shoes(): a list of
@@ -258,9 +277,14 @@ def pair_shoes_visual(image, segments, embedder,
             i, j = ok_idx[a], ok_idx[b]
             cos = float(np.dot(embs[i], embs[j]))        # both unit vectors
             sdist = min(_dist(centers[i], centers[j]) / diag, 1.0)
-            score = cos - spatial_weight * sdist
-            sim[a, b] = sim[b, a] = score
             cosm[a, b] = cosm[b, a] = cos
+            # Hard distance cap: leave NEG so the matcher never pairs two shoes
+            # across the table (giant union crop + almost surely a wrong match).
+            # Each shoe is then matched to its best partner WITHIN range instead
+            # of being dropped to a single. max_dist_frac<=0 disables the cap.
+            if max_dist_frac > 0 and sdist > max_dist_frac:
+                continue
+            sim[a, b] = sim[b, a] = cos - spatial_weight * sdist
 
     # Globally-best 1:1 matching (Hungarian); greedy fallback if scipy is absent.
     try:
@@ -278,7 +302,7 @@ def pair_shoes_visual(image, segments, embedder,
         if a in used_local or b in used_local:
             continue
         if score < min_sim:
-            continue                                     # both -> singles
+            continue                # both -> singles (incl. distance-capped NEG)
         used_local.update((a, b))
         i, j = ok_idx[a], ok_idx[b]
         used_global.update((i, j))

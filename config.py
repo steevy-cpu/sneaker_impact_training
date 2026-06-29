@@ -341,6 +341,22 @@ SEGMENT_PAIR_MIN_SIM = 0.65            # "visual" only: accept a pair only if it
                                         # pair across the table. TUNE on real
                                         # photos -- the engine logs each pair's
                                         # cosine + score to stderr.
+SEGMENT_PAIR_MAX_DIST_FRAC = 0.18      # "visual"+"hybrid": reject a pair whose two
+                                        # shoes' centers are farther apart than this
+                                        # fraction of the image diagonal. Stops the
+                                        # cross-table mis-match whose UNION crop
+                                        # spans the whole table (the "terrible crop"
+                                        # bug). 0 disables. Lower = tighter pairs.
+
+# --- Crop background whitening (the old-system look) -------------------------
+# Paint everything outside the shoe mask(s) white, so each saved crop shows ONLY
+# its one/two shoes on a clean white background -- even if a neighbor sits inside
+# the union box, it's masked away. Needs per-shoe masks (SAM2 gives clean ones;
+# YOLOE-seg too). Fail-safe: a crop with no mask is saved unchanged.
+SEGMENT_WHITEN_CROP = True             # white-out the crop background.
+SEGMENT_WHITEN_DILATE = 9              # grow the mask by this many px first, so a
+                                        # slightly-tight mask doesn't shave the
+                                        # shoe's edge. 0 = exact mask.
 
 # Where whole-table photos are read from and where per-pair crops are written.
 TABLE_INPUT_DIR = "sneaker_impact/table_photos"   # full-table photos land here
