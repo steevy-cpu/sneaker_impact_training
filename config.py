@@ -322,11 +322,15 @@ SEGMENT_PAIR_METHOD = "hybrid"          # "hybrid" (default) = ADJACENCY first
 SEGMENT_PAIR_SPATIAL_WEIGHT = 0.15      # "visual" only: how much closeness on the
                                         # table breaks ties between similar-looking
                                         # shoes. 0 = pure appearance.
-SEGMENT_PAIR_VETO_MIN = 0.25            # "hybrid" only: an ADJACENT candidate is
+SEGMENT_PAIR_VETO_MIN = 0.35            # "hybrid" only: an ADJACENT candidate is
                                         # rejected when its crops' cosine is below
-                                        # this (clearly different objects). True
-                                        # mates in awkward poses measured 0.41-0.49,
-                                        # so keep this floor well under that.
+                                        # this (clearly different objects -> both
+                                        # become singles). True mates in awkward
+                                        # poses measured 0.41-0.49, so stay under
+                                        # 0.41. Raised 0.25->0.35 on 2026-06-29:
+                                        # on TBL-0626-0066 an adjacent MIS-pair
+                                        # scored 0.309 while every real pair was
+                                        # >=0.654 -- a clean gap 0.35 sits in.
 SEGMENT_PAIR_RESCUE_MIN = 0.80          # "hybrid" only: NON-adjacent shoes pair
                                         # only when they look near-identical
                                         # (cos >= this). High on purpose: a gray
