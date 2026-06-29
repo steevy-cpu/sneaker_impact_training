@@ -353,10 +353,16 @@ SEGMENT_PAIR_MAX_DIST_FRAC = 0.18      # "visual"+"hybrid": reject a pair whose 
 # its one/two shoes on a clean white background -- even if a neighbor sits inside
 # the union box, it's masked away. Needs per-shoe masks (SAM2 gives clean ones;
 # YOLOE-seg too). Fail-safe: a crop with no mask is saved unchanged.
-SEGMENT_WHITEN_CROP = True             # white-out the crop background.
+SEGMENT_WHITEN_CROP = True             # mask-out the crop background.
 SEGMENT_WHITEN_DILATE = 9              # grow the mask by this many px first, so a
                                         # slightly-tight mask doesn't shave the
                                         # shoe's edge. 0 = exact mask.
+SEGMENT_WHITEN_COLOR = 205             # background grayscale value (0-255). NOT
+                                        # pure white: 255 makes white shoes/laces
+                                        # dissolve into the background (lost
+                                        # silhouette). ~205 mid-gray keeps white
+                                        # shoes' edges; raise toward 255 for a
+                                        # whiter look, lower for more contrast.
 
 # Where whole-table photos are read from and where per-pair crops are written.
 TABLE_INPUT_DIR = "sneaker_impact/table_photos"   # full-table photos land here
