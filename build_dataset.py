@@ -49,6 +49,11 @@ _BRAND_CANON = {
     "merrell": "Merrell", "puma": "Puma", "mizuno": "Mizuno", "salomon": "Salomon",
     "converse": "Converse", "vans": "Vans", "jordan": "Jordan", "altra": "Altra",
     "skechers": "Skechers", "fila": "Fila", "newbalanc": "New Balance",
+    # Kept in sync with the dash's canonical map (backend/utils/brands.py
+    # CANONICAL_BRANDS): official all-caps spellings that Title-Case would
+    # otherwise get wrong (Oofos/Anta/…). Add new dash pins here too.
+    "oofos": "OOFOS", "anta": "ANTA", "ecco": "ECCO", "peak": "PEAK",
+    "nobull": "NOBULL", "akk": "AKK",
 }
 
 
